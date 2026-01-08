@@ -71,6 +71,11 @@ public class Position {
     private BigDecimal stopLossPrice;
     
     /**
+     * 是否启用移动止损
+     */
+    private Boolean trailingStopEnabled;
+    
+    /**
      * 持仓状态：OPEN-开仓中, CLOSED-已平仓
      */
     private String status;

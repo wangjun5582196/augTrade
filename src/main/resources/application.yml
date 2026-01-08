@@ -110,6 +110,13 @@ trading:
     fixed-take-profit: 250       # 固定止盈$250（盈亏比2.5:1）⚡
     max-holding-minutes: 30      # 最长持仓30分钟 ⚡
     
+    # 移动止损配置（利润最大化）🚀
+    trailing-stop:
+      enabled: true              # ✅ 启用移动止损
+      trigger-profit: 30.0       # 触发阈值：盈利达到$30时启动
+      distance: 10.0             # 跟踪距离：$10（止损价距离当前价）
+      lock-profit-percent: 70.0  # 锁定比例：首次触发时锁定70%利润
+    
   # 策略配置
   strategy:
     enabled: true

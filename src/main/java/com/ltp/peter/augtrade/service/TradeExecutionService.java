@@ -44,6 +44,18 @@ public class TradeExecutionService {
     @org.springframework.beans.factory.annotation.Value("${trading.risk.max-holding-minutes:5}")
     private int maxHoldingMinutes;
     
+    @org.springframework.beans.factory.annotation.Value("${trading.risk.trailing-stop.enabled:true}")
+    private boolean trailingStopEnabled;
+    
+    @org.springframework.beans.factory.annotation.Value("${trading.risk.trailing-stop.trigger-profit:30.0}")
+    private BigDecimal trailingStopTriggerProfit;
+    
+    @org.springframework.beans.factory.annotation.Value("${trading.risk.trailing-stop.distance:10.0}")
+    private BigDecimal trailingStopDistance;
+    
+    @org.springframework.beans.factory.annotation.Value("${trading.risk.trailing-stop.lock-profit-percent:70.0}")
+    private BigDecimal trailingStopLockProfitPercent;
+    
     /**
      * 执行买入交易（高波动版本：使用固定止损止盈）
      */
@@ -312,7 +324,7 @@ public class TradeExecutionService {
     }
     
     /**
-     * 检查多头持仓止盈止损
+     * 检查多头持仓止盈止损（增强版：支持移动止损）
      */
     private void checkLongPosition(String symbol) {
         Position position = positionMapper.selectOne(
@@ -333,12 +345,27 @@ public class TradeExecutionService {
         BigDecimal unrealizedPnl = currentPrice.subtract(position.getAvgPrice())
                 .multiply(position.getQuantity());
         position.setUnrealizedPnl(unrealizedPnl);
+        
+        // 移动止损逻辑（在时间止损前执行）
+        boolean trailingStopUpdated = false;
+        if (trailingStopEnabled) {
+            trailingStopUpdated = updateTrailingStopForLong(position, currentPrice, unrealizedPnl);
+        }
+        
+        // 保存到数据库（包括移动止损的修改）
         positionMapper.updateById(position);
+        
+        // 如果移动止损刚刚启用，记录到日志
+        if (trailingStopUpdated) {
+            log.info("✅ 移动止损状态已保存到数据库 - 持仓ID: {}, trailing_stop_enabled: {}", 
+                    position.getId(), position.getTrailingStopEnabled());
+        }
         
         // 检查时间止损（持仓超过最大时间）
         long holdingMinutes = Duration.between(position.getOpenTime(), LocalDateTime.now()).toMinutes();
         if (holdingMinutes >= maxHoldingMinutes) {
-            log.warn("⏰ 多头触发时间止损 - 持仓{}分钟，超过{}分钟限制", holdingMinutes, maxHoldingMinutes);
+            log.warn("⏰ 多头触发时间止损 - 持仓{}分钟，超过{}分钟限制，当前盈利: ${}", 
+                    holdingMinutes, maxHoldingMinutes, unrealizedPnl);
             executeSell(symbol, position.getQuantity(), "多头时间止损");
             return;
         }
@@ -353,14 +380,16 @@ public class TradeExecutionService {
         
         // 检查止损（多头：价格下跌到止损价）
         if (currentPrice.compareTo(position.getStopLossPrice()) <= 0) {
-            log.warn("🛑 多头触发止损 - 当前: ${}, 止损: ${}, 亏损: ${}", 
+            String stopType = position.getTrailingStopEnabled() != null && position.getTrailingStopEnabled() 
+                    ? "多头移动止损" : "多头止损";
+            log.warn("🛑 多头触发止损 - 当前: ${}, 止损: ${}, 盈亏: ${}", 
                     currentPrice, position.getStopLossPrice(), unrealizedPnl);
-            executeSell(symbol, position.getQuantity(), "多头止损");
+            executeSell(symbol, position.getQuantity(), stopType);
         }
     }
     
     /**
-     * 检查空头持仓止盈止损
+     * 检查空头持仓止盈止损（增强版：支持移动止损）
      */
     private void checkShortPosition(String symbol) {
         Position position = positionMapper.selectOne(
@@ -381,12 +410,27 @@ public class TradeExecutionService {
         BigDecimal unrealizedPnl = position.getAvgPrice().subtract(currentPrice)
                 .multiply(position.getQuantity());
         position.setUnrealizedPnl(unrealizedPnl);
+        
+        // 移动止损逻辑（在时间止损前执行）
+        boolean trailingStopUpdated = false;
+        if (trailingStopEnabled) {
+            trailingStopUpdated = updateTrailingStopForShort(position, currentPrice, unrealizedPnl);
+        }
+        
+        // 保存到数据库（包括移动止损的修改）
         positionMapper.updateById(position);
+        
+        // 如果移动止损刚刚启用，记录到日志
+        if (trailingStopUpdated) {
+            log.info("✅ 移动止损状态已保存到数据库 - 持仓ID: {}, trailing_stop_enabled: {}", 
+                    position.getId(), position.getTrailingStopEnabled());
+        }
         
         // 检查时间止损（持仓超过最大时间）
         long holdingMinutes = Duration.between(position.getOpenTime(), LocalDateTime.now()).toMinutes();
         if (holdingMinutes >= maxHoldingMinutes) {
-            log.warn("⏰ 空头触发时间止损 - 持仓{}分钟，超过{}分钟限制", holdingMinutes, maxHoldingMinutes);
+            log.warn("⏰ 空头触发时间止损 - 持仓{}分钟，超过{}分钟限制，当前盈利: ${}", 
+                    holdingMinutes, maxHoldingMinutes, unrealizedPnl);
             executeBuyToCover(symbol, position.getQuantity(), "空头时间止损");
             return;
         }
@@ -401,9 +445,11 @@ public class TradeExecutionService {
         
         // 检查止损（空头：价格上涨到止损价）
         if (currentPrice.compareTo(position.getStopLossPrice()) >= 0) {
-            log.warn("🛑 空头触发止损 - 当前: ${}, 止损: ${}, 亏损: ${}", 
+            String stopType = position.getTrailingStopEnabled() != null && position.getTrailingStopEnabled() 
+                    ? "空头移动止损" : "空头止损";
+            log.warn("🛑 空头触发止损 - 当前: ${}, 止损: ${}, 盈亏: ${}", 
                     currentPrice, position.getStopLossPrice(), unrealizedPnl);
-            executeBuyToCover(symbol, position.getQuantity(), "空头止损");
+            executeBuyToCover(symbol, position.getQuantity(), stopType);
         }
     }
     
@@ -453,5 +499,101 @@ public class TradeExecutionService {
                 fixedTakeProfit.divide(fixedStopLoss, 2, java.math.RoundingMode.HALF_UP));
         
         return new BigDecimal[]{takeProfit, stopLoss};
+    }
+    
+    /**
+     * 更新多头移动止损
+     * 
+     * @param position 持仓信息
+     * @param currentPrice 当前价格
+     * @param unrealizedPnl 未实现盈亏
+     * @return 是否首次启用了移动止损
+     */
+    private boolean updateTrailingStopForLong(Position position, BigDecimal currentPrice, BigDecimal unrealizedPnl) {
+        // 触发条件：盈利达到触发阈值
+        if (unrealizedPnl.compareTo(trailingStopTriggerProfit) < 0) {
+            return false;
+        }
+        
+        // 首次触发移动止损
+        if (position.getTrailingStopEnabled() == null || !position.getTrailingStopEnabled()) {
+            // 锁定一定比例的利润
+            BigDecimal lockedProfit = unrealizedPnl.multiply(trailingStopLockProfitPercent)
+                    .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
+            BigDecimal newStopLoss = position.getAvgPrice().add(lockedProfit.divide(position.getQuantity(), 2, java.math.RoundingMode.HALF_UP));
+            
+            position.setStopLossPrice(newStopLoss);
+            position.setTrailingStopEnabled(true);
+            
+            log.info("🔄 多头启用移动止损 - 当前价: ${}, 盈利: ${}, 锁定利润: ${}, 新止损价: ${}", 
+                    currentPrice, unrealizedPnl, lockedProfit, newStopLoss);
+            return true; // 返回true表示首次启用
+        }
+        
+        // 计算新的移动止损价
+        BigDecimal newStopLoss = currentPrice.subtract(trailingStopDistance);
+        
+        // 止损价只能上升，不能下降
+        if (newStopLoss.compareTo(position.getStopLossPrice()) > 0) {
+            BigDecimal oldStopLoss = position.getStopLossPrice();
+            position.setStopLossPrice(newStopLoss);
+            
+            // 计算新的锁定利润
+            BigDecimal newLockedProfit = newStopLoss.subtract(position.getAvgPrice())
+                    .multiply(position.getQuantity());
+            
+            log.info("📈 多头移动止损更新 - 当前价: ${}, 盈利: ${}, 止损价: ${} -> ${}, 锁定利润: ${}", 
+                    currentPrice, unrealizedPnl, oldStopLoss, newStopLoss, newLockedProfit);
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 更新空头移动止损
+     * 
+     * @param position 持仓信息
+     * @param currentPrice 当前价格
+     * @param unrealizedPnl 未实现盈亏
+     * @return 是否首次启用了移动止损
+     */
+    private boolean updateTrailingStopForShort(Position position, BigDecimal currentPrice, BigDecimal unrealizedPnl) {
+        // 触发条件：盈利达到触发阈值
+        if (unrealizedPnl.compareTo(trailingStopTriggerProfit) < 0) {
+            return false;
+        }
+        
+        // 首次触发移动止损
+        if (position.getTrailingStopEnabled() == null || !position.getTrailingStopEnabled()) {
+            // 锁定一定比例的利润
+            BigDecimal lockedProfit = unrealizedPnl.multiply(trailingStopLockProfitPercent)
+                    .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
+            BigDecimal newStopLoss = position.getAvgPrice().subtract(lockedProfit.divide(position.getQuantity(), 2, java.math.RoundingMode.HALF_UP));
+            
+            position.setStopLossPrice(newStopLoss);
+            position.setTrailingStopEnabled(true);
+            
+            log.info("🔄 空头启用移动止损 - 当前价: ${}, 盈利: ${}, 锁定利润: ${}, 新止损价: ${}", 
+                    currentPrice, unrealizedPnl, lockedProfit, newStopLoss);
+            return true; // 返回true表示首次启用
+        }
+        
+        // 计算新的移动止损价
+        BigDecimal newStopLoss = currentPrice.add(trailingStopDistance);
+        
+        // 空头：止损价只能下降，不能上升
+        if (newStopLoss.compareTo(position.getStopLossPrice()) < 0) {
+            BigDecimal oldStopLoss = position.getStopLossPrice();
+            position.setStopLossPrice(newStopLoss);
+            
+            // 计算新的锁定利润
+            BigDecimal newLockedProfit = position.getAvgPrice().subtract(newStopLoss)
+                    .multiply(position.getQuantity());
+            
+            log.info("📉 空头移动止损更新 - 当前价: ${}, 盈利: ${}, 止损价: ${} -> ${}, 锁定利润: ${}", 
+                    currentPrice, unrealizedPnl, oldStopLoss, newStopLoss, newLockedProfit);
+        }
+        
+        return false;
     }
 }
