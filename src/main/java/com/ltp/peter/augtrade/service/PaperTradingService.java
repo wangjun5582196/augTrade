@@ -6,9 +6,11 @@ import com.ltp.peter.augtrade.mapper.TradeOrderMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +35,19 @@ public class PaperTradingService {
     
     @Autowired
     private FeishuNotificationService feishuNotificationService;
+    
+    // ✨ 移动止损配置参数
+    @Value("${trading.risk.trailing-stop.enabled:true}")
+    private boolean trailingStopEnabled;
+    
+    @Value("${trading.risk.trailing-stop.trigger-profit:30.0}")
+    private BigDecimal trailingStopTriggerProfit;
+    
+    @Value("${trading.risk.trailing-stop.distance:10.0}")
+    private BigDecimal trailingStopDistance;
+    
+    @Value("${trading.risk.trailing-stop.lock-profit-percent:70.0}")
+    private BigDecimal trailingStopLockProfitPercent;
     
     // 使用线程安全的List存储持仓
     private final List<PaperPosition> openPositions = new CopyOnWriteArrayList<>();
@@ -197,25 +212,41 @@ public class PaperTradingService {
     }
     
     /**
-     * 更新持仓价格
+     * 更新持仓价格（增强版：支持移动止损）
      */
     public void updatePositions(BigDecimal currentPrice) {
         for (PaperPosition position : openPositions) {
             position.setCurrentPrice(currentPrice);
             position.calculateUnrealizedPnL();
             
-            // ✨ 增强：添加详细的监控日志
+            BigDecimal unrealizedPnL = position.getUnrealizedPnL();
+            
+            // ✨ 移动止损逻辑：当盈利超过阈值时触发
+            if (trailingStopEnabled && unrealizedPnL.compareTo(trailingStopTriggerProfit) > 0) {
+                if ("SHORT".equals(position.getSide())) {
+                    updateShortTrailingStop(position, currentPrice, unrealizedPnL);
+                } else if ("LONG".equals(position.getSide())) {
+                    updateLongTrailingStop(position, currentPrice, unrealizedPnL);
+                }
+            }
+            
+            // 详细监控日志
             log.debug("💼 监控 {} - 入场: ${}, 当前: ${}, 止损: ${}, 止盈: ${}, 盈亏: ${}", 
                     position.getSide(),
                     position.getEntryPrice(),
                     currentPrice,
                     position.getStopLossPrice(),
                     position.getTakeProfitPrice(),
-                    position.getUnrealizedPnL());
+                    unrealizedPnL);
             
             // 检查止损
             if (position.isStopLossTriggered()) {
-                log.warn("🛑 触及止损！当前价${} {} 止损价${}", 
+                boolean isTrailingStop = position.getTrailingStopEnabled() != null && 
+                                        position.getTrailingStopEnabled();
+                String stopType = isTrailingStop ? "移动止损" : "止损";
+                
+                log.warn("🛑 触及{}！当前价${} {} 止损价${}", 
+                        stopType,
                         currentPrice,
                         "LONG".equals(position.getSide()) ? "<=" : ">=",
                         position.getStopLossPrice());
@@ -443,6 +474,7 @@ public class PaperTradingService {
             positionEntity.setLeverage(1);
             positionEntity.setTakeProfitPrice(position.getTakeProfitPrice());
             positionEntity.setStopLossPrice(position.getStopLossPrice());
+            positionEntity.setTrailingStopEnabled(false); // ✨ 初始未启用移动止损
             positionEntity.setStatus("OPEN");
             positionEntity.setOpenTime(LocalDateTime.now());
             positionEntity.setCreateTime(LocalDateTime.now());
@@ -513,6 +545,135 @@ public class PaperTradingService {
             
         } catch (Exception e) {
             log.error("保存平仓记录失败: {}", e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * 更新做空移动止损
+     * 
+     * @param position 持仓对象
+     * @param currentPrice 当前价格
+     * @param unrealizedPnL 未实现盈亏
+     */
+    private void updateShortTrailingStop(PaperPosition position, BigDecimal currentPrice, 
+                                         BigDecimal unrealizedPnL) {
+        // 首次触发移动止损
+        if (position.getTrailingStopEnabled() == null || !position.getTrailingStopEnabled()) {
+            position.setTrailingStopEnabled(true);
+            
+            // 锁定一定比例的利润
+            BigDecimal lockedProfit = unrealizedPnL.multiply(trailingStopLockProfitPercent)
+                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+            
+            // 计算新的止损价：入场价 - 锁定利润 / 数量
+            BigDecimal newStopLoss = position.getEntryPrice()
+                    .subtract(lockedProfit.divide(position.getQuantity(), 2, RoundingMode.HALF_UP));
+            
+            position.setStopLossPrice(newStopLoss);
+            
+            log.info("🔄 空头启用移动止损 - 当前价: ${}, 盈利: ${}, 锁定利润: ${}, 新止损价: ${}",
+                    currentPrice, unrealizedPnL, lockedProfit, newStopLoss);
+            
+            // ✨ 同步更新数据库
+            syncTrailingStopToDatabase(position);
+            return;
+        }
+        
+        // 已启用移动止损，继续更新
+        BigDecimal newStopLoss = currentPrice.add(trailingStopDistance);
+        BigDecimal oldStopLoss = position.getStopLossPrice();
+        
+        // 只在新止损价更优时更新（做空：止损价降低才是更优）
+        if (newStopLoss.compareTo(oldStopLoss) < 0) {
+            position.setStopLossPrice(newStopLoss);
+            
+            // 计算新的锁定利润
+            BigDecimal newLockedProfit = position.getEntryPrice().subtract(newStopLoss)
+                    .multiply(position.getQuantity());
+            
+            log.info("📉 空头移动止损更新 - 当前价: ${}, 盈利: ${}, 止损价: ${} -> ${}, 锁定利润: ${}",
+                    currentPrice, unrealizedPnL, oldStopLoss, newStopLoss, newLockedProfit);
+        }
+    }
+    
+    /**
+     * 更新做多移动止损
+     * 
+     * @param position 持仓对象
+     * @param currentPrice 当前价格
+     * @param unrealizedPnL 未实现盈亏
+     */
+    private void updateLongTrailingStop(PaperPosition position, BigDecimal currentPrice, 
+                                        BigDecimal unrealizedPnL) {
+        // 首次触发移动止损
+        if (position.getTrailingStopEnabled() == null || !position.getTrailingStopEnabled()) {
+            position.setTrailingStopEnabled(true);
+            
+            // 锁定一定比例的利润
+            BigDecimal lockedProfit = unrealizedPnL.multiply(trailingStopLockProfitPercent)
+                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+            
+            // 计算新的止损价：入场价 + 锁定利润 / 数量
+            BigDecimal newStopLoss = position.getEntryPrice()
+                    .add(lockedProfit.divide(position.getQuantity(), 2, RoundingMode.HALF_UP));
+            
+            position.setStopLossPrice(newStopLoss);
+            
+            log.info("🔄 多头启用移动止损 - 当前价: ${}, 盈利: ${}, 锁定利润: ${}, 新止损价: ${}",
+                    currentPrice, unrealizedPnL, lockedProfit, newStopLoss);
+            
+            // ✨ 同步更新数据库
+            syncTrailingStopToDatabase(position);
+            return;
+        }
+        
+        // 已启用移动止损，继续更新
+        BigDecimal newStopLoss = currentPrice.subtract(trailingStopDistance);
+        BigDecimal oldStopLoss = position.getStopLossPrice();
+        
+        // 只在新止损价更优时更新（做多：止损价提高才是更优）
+        if (newStopLoss.compareTo(oldStopLoss) > 0) {
+            position.setStopLossPrice(newStopLoss);
+            
+            // 计算新的锁定利润
+            BigDecimal newLockedProfit = newStopLoss.subtract(position.getEntryPrice())
+                    .multiply(position.getQuantity());
+            
+            log.info("📈 多头移动止损更新 - 当前价: ${}, 盈利: ${}, 止损价: ${} -> ${}, 锁定利润: ${}",
+                    currentPrice, unrealizedPnL, oldStopLoss, newStopLoss, newLockedProfit);
+        }
+    }
+    
+    /**
+     * ✨ 同步移动止损状态到数据库
+     * 
+     * @param position 持仓对象
+     */
+    private void syncTrailingStopToDatabase(PaperPosition position) {
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<com.ltp.peter.augtrade.entity.Position> posQuery = 
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            posQuery.eq("symbol", position.getSymbol())
+                    .eq("direction", position.getSide())
+                    .eq("status", "OPEN")
+                    .orderByDesc("open_time")
+                    .last("LIMIT 1");
+            
+            com.ltp.peter.augtrade.entity.Position positionEntity = positionMapper.selectOne(posQuery);
+            
+            if (positionEntity != null) {
+                positionEntity.setTrailingStopEnabled(position.getTrailingStopEnabled());
+                positionEntity.setStopLossPrice(position.getStopLossPrice());
+                positionEntity.setUpdateTime(LocalDateTime.now());
+                positionMapper.updateById(positionEntity);
+                log.debug("💾 移动止损状态已同步到数据库 - trailing_stop_enabled: {}, new_stop_loss: ${}", 
+                        position.getTrailingStopEnabled(), position.getStopLossPrice());
+            } else {
+                log.warn("⚠️ 未找到持仓记录，无法同步移动止损状态");
+            }
+            
+        } catch (Exception e) {
+            log.error("同步移动止损状态到数据库失败", e);
         }
     }
 }

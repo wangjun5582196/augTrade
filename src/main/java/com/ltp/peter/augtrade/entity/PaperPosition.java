@@ -75,6 +75,11 @@ public class PaperPosition {
     private String status;
     
     /**
+     * 是否启用移动止损
+     */
+    private Boolean trailingStopEnabled;
+    
+    /**
      * 计算未实现盈亏
      */
     public void calculateUnrealizedPnL() {
