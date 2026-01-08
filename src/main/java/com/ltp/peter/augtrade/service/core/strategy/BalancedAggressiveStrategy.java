@@ -95,8 +95,8 @@ public class BalancedAggressiveStrategy implements Strategy {
                 momentum = currentPrice.subtract(price5);
             }
             
-            log.debug("[{}] Williams: {}, RSI: {}, ADX: {}, ML: {:.2f}, 动量: {}, K线形态: {}", 
-                    STRATEGY_NAME, williamsR, rsi, adx, mlPrediction, momentum, 
+            log.debug("[{}] Williams: {}, RSI: {}, ADX: {}, ML: {}, 动量: {}, K线形态: {}", 
+                    STRATEGY_NAME, williamsR, rsi, adx, String.format("%.2f", mlPrediction), momentum, 
                     pattern.hasPattern() ? pattern.getType() : "无");
             
             // 评分系统
@@ -141,10 +141,10 @@ public class BalancedAggressiveStrategy implements Strategy {
             // ML评分（权重2）
             if (mlPrediction > 0.52) {
                 buyScore += 2;
-                log.debug("[{}] ML看涨 ({:.2f}) → +2分", STRATEGY_NAME, mlPrediction);
+                log.debug("[{}] ML看涨 ({}) → +2分", STRATEGY_NAME, String.format("%.2f", mlPrediction));
             } else if (mlPrediction < 0.48) {
                 sellScore += 2;
-                log.debug("[{}] ML看跌 ({:.2f}) → +2分", STRATEGY_NAME, mlPrediction);
+                log.debug("[{}] ML看跌 ({}) → +2分", STRATEGY_NAME, String.format("%.2f", mlPrediction));
             }
             
             // 动量评分（权重1）

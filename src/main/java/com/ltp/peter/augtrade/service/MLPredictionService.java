@@ -47,7 +47,7 @@ public class MLPredictionService {
             // 3. 模型预测（使用训练好的权重）
             double prediction = predict(normalizedFeatures);
             
-            log.info("ML预测结果: {:.2f} ({})", prediction, 
+            log.info("ML预测结果: {} ({})", String.format("%.2f", prediction), 
                     prediction > 0.6 ? "看涨" : prediction < 0.4 ? "看跌" : "中性");
             
             return prediction;

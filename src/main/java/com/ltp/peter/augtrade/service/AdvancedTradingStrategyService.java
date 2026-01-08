@@ -356,7 +356,7 @@ public class AdvancedTradingStrategyService {
         double confidence = mlPredictionService.getConfidence(klines);
         String predictionStrength = mlPredictionService.getPredictionStrength(mlPrediction);
         
-        log.info("🤖 ML预测: {:.3f} ({}) | 置信度: {:.2f}", mlPrediction, predictionStrength, confidence);
+        log.info("🤖 ML预测: {} ({}) | 置信度: {}", String.format("%.3f", mlPrediction), predictionStrength, String.format("%.2f", confidence));
         
         // 2. Williams %R传统指标
         BigDecimal williamsR = indicatorService.calculateWilliamsR(klines, 14);

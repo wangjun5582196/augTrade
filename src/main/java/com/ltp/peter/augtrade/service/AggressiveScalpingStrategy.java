@@ -144,14 +144,14 @@ public class AggressiveScalpingStrategy {
         // ML预测作为辅助（阈值放宽）
         double mlPrediction = mlPredictionService.predictMarketDirection(klines);
         
-        log.info("📊 Williams: {}, ADX: {}, ML: {:.2f}", williamsR, adx, mlPrediction);
+        log.info("📊 Williams: {}, ADX: {}, ML: {}", williamsR, adx, String.format("%.2f", mlPrediction));
         
         // 买入条件（大幅放宽）：
         // 1. Williams < -50（从-70放宽到-50）
         // 2. ML > 0.45（从0.75放宽到0.45，只要稍微看涨就行）
         if (williamsR.compareTo(new BigDecimal("-50")) < 0 &&
             mlPrediction > 0.45) {
-            log.info("🚀 买入信号：Williams={}, ML={:.2f}", williamsR, mlPrediction);
+            log.info("🚀 买入信号：Williams={}, ML={}", williamsR, String.format("%.2f", mlPrediction));
             return Signal.BUY;
         }
         
@@ -160,7 +160,7 @@ public class AggressiveScalpingStrategy {
         // 2. ML < 0.55（从0.25放宽到0.55，只要稍微看跌就行）
         if (williamsR.compareTo(new BigDecimal("-50")) > 0 &&
             mlPrediction < 0.55) {
-            log.info("📉 卖出信号：Williams={}, ML={:.2f}", williamsR, mlPrediction);
+            log.info("📉 卖出信号：Williams={}, ML={}", williamsR, String.format("%.2f", mlPrediction));
             return Signal.SELL;
         }
         
@@ -296,8 +296,8 @@ public class AggressiveScalpingStrategy {
         // ML预测
         double mlPrediction = mlPredictionService.predictMarketDirection(klines);
         
-        log.info("📊 动量: 2K={}, 5K={}, Williams: {}, ML: {:.2f}", 
-                shortMomentum, mediumMomentum, williamsR, mlPrediction);
+        log.info("📊 动量: 2K={}, 5K={}, Williams: {}, ML: {}", 
+                shortMomentum, mediumMomentum, williamsR, String.format("%.2f", mlPrediction));
         
         // 买入条件（超级宽松）：
         // 任何一个满足即可：
@@ -307,8 +307,8 @@ public class AggressiveScalpingStrategy {
         if (shortMomentum.compareTo(BigDecimal.ZERO) > 0 ||
             williamsR.compareTo(new BigDecimal("-40")) < 0 ||
             mlPrediction > 0.52) {
-            log.info("🚀 买入信号：动量={}, Williams={}, ML={:.2f}", 
-                    shortMomentum, williamsR, mlPrediction);
+            log.info("🚀 买入信号：动量={}, Williams={}, ML={}", 
+                    shortMomentum, williamsR, String.format("%.2f", mlPrediction));
             return Signal.BUY;
         }
         
@@ -320,8 +320,8 @@ public class AggressiveScalpingStrategy {
         if (shortMomentum.compareTo(BigDecimal.ZERO) < 0 ||
             williamsR.compareTo(new BigDecimal("-60")) > 0 ||
             mlPrediction < 0.48) {
-            log.info("📉 卖出信号：动量={}, Williams={}, ML={:.2f}", 
-                    shortMomentum, williamsR, mlPrediction);
+            log.info("📉 卖出信号：动量={}, Williams={}, ML={}", 
+                    shortMomentum, williamsR, String.format("%.2f", mlPrediction));
             return Signal.SELL;
         }
         
@@ -399,14 +399,14 @@ public class AggressiveScalpingStrategy {
         
         BigDecimal williamsR = indicatorService.calculateWilliamsR(klines, 14);
         
-        log.info("📊 ML: {:.2f}, 置信度: {:.2f}, Williams: {}", 
-                mlPrediction, confidence, williamsR);
+        log.info("📊 ML: {}, 置信度: {}, Williams: {}", 
+                String.format("%.2f", mlPrediction), String.format("%.2f", confidence), williamsR);
         
         // 买入条件（大幅降低阈值）：
         // ML > 0.55（从0.75降到0.55）
         // 置信度 > 0.5（从0.7降到0.5）
         if (mlPrediction > 0.55 && confidence > 0.5) {
-            log.info("🚀 买入信号：ML看涨 {:.2f}", mlPrediction);
+            log.info("🚀 买入信号：ML看涨 {}", String.format("%.2f", mlPrediction));
             return Signal.BUY;
         }
         
@@ -414,7 +414,7 @@ public class AggressiveScalpingStrategy {
         // ML < 0.45（从0.25升到0.45）
         // 置信度 > 0.5
         if (mlPrediction < 0.45 && confidence > 0.5) {
-            log.info("📉 卖出信号：ML看跌 {:.2f}", mlPrediction);
+            log.info("📉 卖出信号：ML看跌 {}", String.format("%.2f", mlPrediction));
             return Signal.SELL;
         }
         

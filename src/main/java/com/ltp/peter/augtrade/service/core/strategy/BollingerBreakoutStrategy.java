@@ -83,7 +83,7 @@ public class BollingerBreakoutStrategy implements Strategy {
             // 如果带宽收窄（波动率降低），突破信号更强
             if (bandwidthPercent < 3.0) {
                 baseStrength += 15;
-                log.debug("[{}] 带宽收窄 ({:.2f}%), 提高信号强度", STRATEGY_NAME, bandwidthPercent);
+                log.debug("[{}] 带宽收窄 ({}%), 提高信号强度", STRATEGY_NAME, String.format("%.2f", bandwidthPercent));
             }
             
             // 买入信号1：价格触及下轨

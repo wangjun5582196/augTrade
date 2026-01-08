@@ -81,7 +81,7 @@ public class TradingScheduler {
     @Value("${bybit.api.enabled:false}")
     private boolean bybitEnabled;
     
-    @Value("${bybit.gold.symbol:XAUUSDT}")
+    @Value("${bybit.gold.symbol:XAUTUSDT}")
     private String bybitSymbol;
     
     @Value("${bybit.gold.min-qty:0.01}")
@@ -272,10 +272,28 @@ public class TradingScheduler {
                     return;
                 }
                 
-                // 持有多头，出现做空信号 → 平仓
+                // 持有多头，出现做空信号 → 平仓（增强版：盈利保护 + 信号强度检查）
                 if (currentPosition.getSide().equals("LONG") && 
                     tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
-                    log.warn("⚠️ 信号反转！持有多头但出现做空信号，持仓{}秒后平仓", holdingSeconds);
+                    
+                    // ✨ 盈利保护：盈利时不反转平仓
+                    if (unrealizedPnL.compareTo(BigDecimal.ZERO) >= 0) {
+                        log.info("💰 持仓盈利${}，忽略反转信号，让利润奔跑", unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // ✨ 信号强度检查：只在强信号时反转
+                    if (tradingSignal.getStrength() < 75) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥75），持仓亏损${}但不平仓", 
+                                tradingSignal.getStrength(), unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 只有亏损且强信号才反转
+                    log.warn("⚠️ 信号反转！持有多头但出现强做空信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
+                             tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
                     lastReversalTime = LocalDateTime.now();
                     log.info("🔒 启动{}秒冷却期，防止频繁交易", REVERSAL_COOLDOWN_SECONDS);
@@ -283,10 +301,28 @@ public class TradingScheduler {
                     return;
                 }
                 
-                // 持有空头，出现做多信号 → 平仓
+                // 持有空头，出现做多信号 → 平仓（增强版：盈利保护 + 信号强度检查）
                 if (currentPosition.getSide().equals("SHORT") && 
                     tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY) {
-                    log.warn("⚠️ 信号反转！持有空头但出现做多信号，持仓{}秒后平仓", holdingSeconds);
+                    
+                    // ✨ 盈利保护：盈利时不反转平仓
+                    if (unrealizedPnL.compareTo(BigDecimal.ZERO) >= 0) {
+                        log.info("💰 持仓盈利${}，忽略反转信号，让利润奔跑", unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // ✨ 信号强度检查：只在强信号时反转
+                    if (tradingSignal.getStrength() < 75) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥75），持仓亏损${}但不平仓", 
+                                tradingSignal.getStrength(), unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 只有亏损且强信号才反转
+                    log.warn("⚠️ 信号反转！持有空头但出现强做多信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
+                             tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
                     lastReversalTime = LocalDateTime.now();
                     log.info("🔒 启动{}秒冷却期，防止频繁交易", REVERSAL_COOLDOWN_SECONDS);
@@ -681,12 +717,12 @@ public class TradingScheduler {
         // 判断策略是否可行
         if (totalTrades >= 20) {
             if (winRate >= 55 && totalProfit > 0) {
-                log.info("✅ 策略表现良好！胜率{:.1f}%，累计盈利${:.2f}", winRate, totalProfit);
+                log.info("✅ 策略表现良好！胜率{}%，累计盈利${}", String.format("%.1f", winRate), String.format("%.2f", totalProfit));
                 log.info("💡 建议：可以考虑启用真实交易（先小资金测试）");
             } else if (winRate >= 50 && totalProfit > 0) {
                 log.info("⚠️  策略表现一般，胜率{:.1f}%，建议继续观察", winRate);
             } else {
-                log.info("❌ 策略表现不佳，胜率{:.1f}%，亏损${:.2f}", winRate, Math.abs(totalProfit));
+                log.info("❌ 策略表现不佳，胜率{}%，亏损${}", String.format("%.1f", winRate), String.format("%.2f", Math.abs(totalProfit)));
                 log.info("💡 建议：优化策略参数或更换策略");
             }
         } else {
@@ -767,11 +803,11 @@ public class TradingScheduler {
         
         if (lastProfitLoss.compareTo(profitThreshold) > 0) {
             // 大盈利后短冷却期（30秒），趋势可能延续
-            log.debug("✅ 上次盈利${:.2f}，缩短冷却期至30秒", lastProfitLoss);
+            log.debug("✅ 上次盈利${}，缩短冷却期至30秒", String.format("%.2f", lastProfitLoss));
             return 30;
         } else if (lastProfitLoss.compareTo(lossThreshold.negate()) < 0) {
             // 大亏损后长冷却期（5分钟），避免连续亏损
-            log.debug("❌ 上次亏损${:.2f}，延长冷却期至300秒", lastProfitLoss);
+            log.debug("❌ 上次亏损${}，延长冷却期至300秒", String.format("%.2f", lastProfitLoss));
             return 300;
         } else {
             // 默认1分钟冷却

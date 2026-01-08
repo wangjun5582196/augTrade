@@ -74,9 +74,9 @@ bybit:
     testnet: false                          # ✅ 正式网（获取真实价格）
     paper-trading: true                     # ✅ 模拟交易模式（不实际下单）
   gold:
-    symbol: XAUTUSDT                        # ✅ 黄金永续合约（正确的symbol）
-    min-qty: 10                             # ⭐ 最小0.01金衡盎司
-    max-qty: 100                            # 最大0.1金衡盎司
+    symbol: XAUTUSDT                        # ✅ 黄金永续合约（统一使用XAUTUSDT）
+    min-qty: 10
+    max-qty: 100
     leverage: 2                             # ⭐ 2倍杠杆（正式网建议保守）
   risk:
     # 止损止盈模式：fixed（固定）/ atr（动态ATR）

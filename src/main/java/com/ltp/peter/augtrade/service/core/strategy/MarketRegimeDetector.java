@@ -72,14 +72,14 @@ public class MarketRegimeDetector {
             // 计算趋势一致性（最近5根K线的方向一致程度）
             double trendConsistency = calculateTrendConsistency(klines, 5);
             
-            log.debug("市场环境指标 - ADX: {:.2f}, 波动率: {:.4f}, 趋势一致性: {:.2f}", 
-                    adx, volatility, trendConsistency);
+            log.debug("市场环境指标 - ADX: {}, 波动率: {}, 趋势一致性: {}", 
+                    String.format("%.2f", adx), String.format("%.4f", volatility), String.format("%.2f", trendConsistency));
             
             // 根据指标判断市场环境
             MarketRegime regime = classifyRegime(adx, volatility, trendConsistency);
             
-            log.info("📊 市场环境: {} (ADX={:.1f}, 波动率={:.2f}%, 一致性={:.0f}%)", 
-                    regime.getDescription(), adx, volatility * 100, trendConsistency * 100);
+            log.info("📊 市场环境: {} (ADX={}, 波动率={}%, 一致性={}%)", 
+                    regime.getDescription(), String.format("%.1f", adx), String.format("%.2f", volatility * 100), String.format("%.0f", trendConsistency * 100));
             
             return regime;
             
