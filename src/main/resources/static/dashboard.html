@@ -487,6 +487,8 @@
             cursor: pointer;
         }
     </style>
+    <!-- Lightweight Charts Library -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="container">
@@ -508,6 +510,11 @@
 
         <!-- Stats Overview -->
         <div class="stats-grid">
+            <div class="stat-card">
+                <h3>💰 黄金价格</h3>
+                <div class="value neutral" id="goldPrice">--</div>
+                <div class="sub-value">XAUTUSDT 实时价格</div>
+            </div>
             <div class="stat-card">
                 <h3>总盈亏</h3>
                 <div class="value neutral" id="totalPnl">--</div>
@@ -557,6 +564,22 @@
                 </div>
             </div>
 
+            <!-- Cumulative Profit Chart -->
+            <div class="card full-width">
+                <h2>💹 累计盈利曲线</h2>
+                <div id="cumulativeProfitChart" style="height: 350px; position: relative;">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- Daily Profit Line Chart -->
+            <div class="card full-width">
+                <h2>📊 每日盈亏曲线</h2>
+                <div id="dailyProfitLineChart" style="height: 350px; position: relative;">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
             <!-- Recent Trades -->
             <div class="card full-width">
                 <h2>📋 最近交易记录</h2>
@@ -567,6 +590,7 @@
 
     <script>
         let autoRefreshInterval;
+        let goldPriceInterval;
 
         // Load all data
         async function loadAllData() {
@@ -575,7 +599,10 @@
                 loadPositions(),
                 loadStrategyStats(),
                 loadDailyPnl(),
-                loadRecentTrades()
+                loadRecentTrades(),
+                loadGoldPrice(),
+                loadCumulativeProfitChart(),
+                loadDailyProfitLineChart()
             ]);
             
             document.getElementById('lastUpdate').textContent = 
@@ -803,12 +830,17 @@
         // Auto refresh toggle
         document.getElementById('autoRefresh').addEventListener('change', function(e) {
             if (e.target.checked) {
-                // Start auto refresh every 30 seconds
-                autoRefreshInterval = setInterval(loadAllData, 30000);
+                // Start auto refresh every 10 seconds
+                autoRefreshInterval = setInterval(loadAllData, 10000);
+                // Start gold price real-time refresh every 5 seconds
+                goldPriceInterval = setInterval(loadGoldPrice, 5000);
             } else {
                 // Stop auto refresh
                 if (autoRefreshInterval) {
                     clearInterval(autoRefreshInterval);
+                }
+                if (goldPriceInterval) {
+                    clearInterval(goldPriceInterval);
                 }
             }
         });
@@ -816,8 +848,11 @@
         // Initial load
         loadAllData();
 
-        // Start auto refresh
-        autoRefreshInterval = setInterval(loadAllData, 30000);
+        // Start auto refresh (every 10 seconds)
+        autoRefreshInterval = setInterval(loadAllData, 10000);
+        
+        // Start gold price real-time refresh (every 5 seconds)
+        goldPriceInterval = setInterval(loadGoldPrice, 5000);
 
         // Close all positions
         async function closeAllPositions() {
@@ -929,6 +964,212 @@
             }
         }
 
+        // Load gold price from Bybit
+        async function loadGoldPrice() {
+            try {
+                const response = await fetch('/api/dashboard/gold-price');
+                const data = await response.json();
+                
+                if (data.success && data.price) {
+                    const price = parseFloat(data.price);
+                    const element = document.getElementById('goldPrice');
+                    element.textContent = `$${price.toFixed(2)}`;
+                    element.className = 'value neutral';
+                } else {
+                    document.getElementById('goldPrice').textContent = '--';
+                }
+            } catch (error) {
+                console.error('加载黄金价格失败:', error);
+                document.getElementById('goldPrice').textContent = '--';
+            }
+        }
+
+        // Load and render cumulative profit chart
+        let cumulativeChart = null;
+        let cumulativeSeries = null;
+
+        async function loadCumulativeProfitChart() {
+            const container = document.getElementById('cumulativeProfitChart');
+            
+            try {
+                // 获取所有交易记录
+                const response = await fetch('/api/dashboard/recent-trades?limit=1000');
+                const data = await response.json();
+                
+                if (data.success && data.count > 0) {
+                    // 按时间排序
+                    const trades = data.data.sort((a, b) => 
+                        new Date(a.executedTime) - new Date(b.executedTime)
+                    );
+                    
+                    // 计算累计盈亏
+                    let cumulative = 0;
+                    const chartData = trades.map(trade => {
+                        cumulative += parseFloat(trade.profitLoss || 0);
+                        
+                        const timestamp = new Date(trade.executedTime).getTime() / 1000;
+                        
+                        return {
+                            time: timestamp,
+                            value: cumulative
+                        };
+                    });
+                    
+                    // 渲染图表
+                    renderCumulativeChart(chartData);
+                } else {
+                    container.innerHTML = '<div class="empty-state">暂无交易数据</div>';
+                }
+            } catch (error) {
+                console.error('加载累计盈利曲线失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        function renderCumulativeChart(chartData) {
+            const container = document.getElementById('cumulativeProfitChart');
+            container.innerHTML = '';
+            
+            // 创建图表
+            cumulativeChart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 350,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: '#f0f0f0' },
+                    horzLines: { color: '#f0f0f0' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#d1d4dc',
+                },
+                timeScale: {
+                    borderColor: '#d1d4dc',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            // 添加面积图系列（更美观）
+            cumulativeSeries = cumulativeChart.addAreaSeries({
+                topColor: 'rgba(38, 166, 154, 0.4)',
+                bottomColor: 'rgba(38, 166, 154, 0.0)',
+                lineColor: 'rgba(38, 166, 154, 1)',
+                lineWidth: 2,
+            });
+
+            // 设置数据
+            cumulativeSeries.setData(chartData);
+
+            // 自适应内容
+            cumulativeChart.timeScale().fitContent();
+
+            // 窗口大小变化时调整
+            window.addEventListener('resize', () => {
+                if (cumulativeChart) {
+                    cumulativeChart.applyOptions({ 
+                        width: container.clientWidth 
+                    });
+                }
+            });
+        }
+
+        // Load and render daily profit line chart
+        let dailyLineChart = null;
+        let dailyLineSeries = null;
+
+        async function loadDailyProfitLineChart() {
+            const container = document.getElementById('dailyProfitLineChart');
+            
+            try {
+                const response = await fetch('/api/dashboard/daily-pnl?days=30');
+                const data = await response.json();
+                
+                if (data.success && data.count > 0) {
+                    const chartData = data.data.map(day => {
+                        const date = new Date(day.date);
+                        const timestamp = date.getTime() / 1000;
+                        
+                        return {
+                            time: timestamp,
+                            value: parseFloat(day.pnl)
+                        };
+                    });
+                    
+                    renderDailyLineChart(chartData);
+                } else {
+                    container.innerHTML = '<div class="empty-state">暂无数据</div>';
+                }
+            } catch (error) {
+                console.error('加载每日盈亏曲线失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        function renderDailyLineChart(chartData) {
+            const container = document.getElementById('dailyProfitLineChart');
+            container.innerHTML = '';
+            
+            // 创建图表
+            dailyLineChart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 350,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: '#f0f0f0' },
+                    horzLines: { color: '#f0f0f0' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#d1d4dc',
+                },
+                timeScale: {
+                    borderColor: '#d1d4dc',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            // 添加折线图系列
+            dailyLineSeries = dailyLineChart.addLineSeries({
+                color: '#667eea',
+                lineWidth: 3,
+            });
+
+            // 设置数据
+            dailyLineSeries.setData(chartData);
+
+            // 添加零线标记
+            dailyLineChart.addLineSeries({
+                color: '#999999',
+                lineWidth: 1,
+                lineStyle: 2, // dashed
+                priceLineVisible: false,
+            }).setData(chartData.map(d => ({ time: d.time, value: 0 })));
+
+            // 自适应内容
+            dailyLineChart.timeScale().fitContent();
+
+            // 窗口大小变化时调整
+            window.addEventListener('resize', () => {
+                if (dailyLineChart) {
+                    dailyLineChart.applyOptions({ 
+                        width: container.clientWidth 
+                    });
+                }
+            });
+        }
+
         // Show toast notification
         function showToast(message, type = 'success') {
             // Remove existing toast
@@ -956,6 +1197,7 @@
                 }
             }, 3000);
         }
+
     </script>
 </body>
 </html>

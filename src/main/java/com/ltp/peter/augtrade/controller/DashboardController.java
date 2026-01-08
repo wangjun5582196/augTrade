@@ -39,6 +39,9 @@ public class DashboardController {
     @Autowired(required = false)
     private com.ltp.peter.augtrade.service.BybitTradingService bybitTradingService;
     
+    @Autowired
+    private com.ltp.peter.augtrade.mapper.KlineMapper klineMapper;
+    
     /**
      * 获取仪表板概览数据
      */
@@ -376,6 +379,119 @@ public class DashboardController {
             log.error("获取每日盈亏统计失败", e);
             result.put("success", false);
             result.put("message", "获取每日盈亏失败: " + e.getMessage());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 获取黄金K线数据
+     */
+    @GetMapping("/gold-kline")
+    public Map<String, Object> getGoldKline(
+            @RequestParam(required = false) String symbol,
+            @RequestParam(defaultValue = "15") String interval,
+            @RequestParam(defaultValue = "100") int limit) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // 如果没有指定symbol，尝试自动检测数据库中的黄金标的
+            if (symbol == null || symbol.isEmpty()) {
+                // 按优先级尝试多个可能的黄金标的符号
+                String[] possibleSymbols = {"XAUTUSDT", "XAUUSDT", "XAUUSD"};
+                for (String trySymbol : possibleSymbols) {
+                    long count = klineMapper.selectCount(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.ltp.peter.augtrade.entity.Kline>()
+                            .eq(com.ltp.peter.augtrade.entity.Kline::getSymbol, trySymbol)
+                            .eq(com.ltp.peter.augtrade.entity.Kline::getInterval, interval)
+                    );
+                    if (count > 0) {
+                        symbol = trySymbol;
+                        log.info("自动检测到K线数据标的: {}, 数据量: {}", symbol, count);
+                        break;
+                    }
+                }
+                
+                // 如果还是没找到，使用默认值
+                if (symbol == null || symbol.isEmpty()) {
+                    symbol = "XAUTUSDT";
+                    log.warn("未找到K线数据，使用默认标的: {}", symbol);
+                }
+            }
+            
+            // 查询K线数据
+            List<com.ltp.peter.augtrade.entity.Kline> klines = klineMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.ltp.peter.augtrade.entity.Kline>()
+                    .eq(com.ltp.peter.augtrade.entity.Kline::getSymbol, symbol)
+                    .eq(com.ltp.peter.augtrade.entity.Kline::getInterval, interval)
+                    .orderByDesc(com.ltp.peter.augtrade.entity.Kline::getTimestamp)
+                    .last("LIMIT " + limit)
+            );
+            
+            // 反转顺序（从旧到新）
+            Collections.reverse(klines);
+            
+            // 转换为图表需要的格式
+            List<Map<String, Object>> chartData = new ArrayList<>();
+            for (com.ltp.peter.augtrade.entity.Kline kline : klines) {
+                Map<String, Object> data = new HashMap<>();
+                data.put("time", kline.getTimestamp().toString());
+                data.put("open", kline.getOpenPrice());
+                data.put("high", kline.getHighPrice());
+                data.put("low", kline.getLowPrice());
+                data.put("close", kline.getClosePrice());
+                data.put("volume", kline.getVolume());
+                chartData.add(data);
+            }
+            
+            result.put("success", true);
+            result.put("symbol", symbol);
+            result.put("interval", interval);
+            result.put("count", chartData.size());
+            result.put("data", chartData);
+            
+        } catch (Exception e) {
+            log.error("获取黄金K线数据失败", e);
+            result.put("success", false);
+            result.put("message", "获取K线数据失败: " + e.getMessage());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 获取黄金实时价格（从Bybit）
+     */
+    @GetMapping("/gold-price")
+    public Map<String, Object> getGoldPrice() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            String symbol = "XAUTUSDT"; // 黄金永续合约
+            
+            if (bybitTradingService != null) {
+                BigDecimal price = bybitTradingService.getCurrentPrice(symbol);
+                
+                if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                    result.put("success", true);
+                    result.put("symbol", symbol);
+                    result.put("price", price.setScale(2, RoundingMode.HALF_UP));
+                    result.put("timestamp", System.currentTimeMillis());
+                    
+                    log.debug("获取{}价格成功: {}", symbol, price);
+                } else {
+                    result.put("success", false);
+                    result.put("message", "获取价格失败");
+                }
+            } else {
+                result.put("success", false);
+                result.put("message", "Bybit服务未启用");
+            }
+            
+        } catch (Exception e) {
+            log.error("获取黄金价格失败", e);
+            result.put("success", false);
+            result.put("message", "获取价格失败: " + e.getMessage());
         }
         
         return result;

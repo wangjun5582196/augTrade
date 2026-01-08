@@ -171,29 +171,106 @@ public class RealMarketDataService {
      * 
      * 金十数据提供实时贵金属报价
      * 网站: https://www.jin10.com/
+     * 
+     * 支持获取：
+     * - 现货黄金（XAU/USD）
+     * - 伦敦金
+     * - COMEX黄金期货
+     * 
+     * @return 黄金价格（美元/盎司），失败返回null
      */
     public BigDecimal getGoldPriceFromJin10() {
         try {
-            // 注意：这是示例URL，实际需要根据金十数据的API文档调整
-            String url = "https://datacenter-api.jin10.com/market_snapshot";
+            // 金十数据实时行情API
+            // 现货黄金代码：XAUUSD
+            String url = "https://flash-api.jin10.com/get_quote?symbol=XAUUSD";
             
             Request request = new Request.Builder()
                     .url(url)
-                    .addHeader("User-Agent", "Mozilla/5.0")
+                    .addHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+                    .addHeader("Referer", "https://www.jin10.com/")
+                    .addHeader("Accept", "application/json")
                     .build();
             
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
                     String jsonData = response.body().string();
-                    // 根据实际API响应格式解析
-                    log.info("从金十数据获取行情: {}", jsonData);
-                    // 解析逻辑需要根据实际API响应调整
+                    log.debug("金十数据原始响应: {}", jsonData);
+                    
+                    JsonObject jsonObject = JsonParser.parseString(jsonData).getAsJsonObject();
+                    
+                    // 检查返回状态
+                    if (jsonObject.has("code") && jsonObject.get("code").getAsInt() == 0) {
+                        JsonObject data = jsonObject.getAsJsonObject("data");
+                        
+                        // 获取当前价格（买入价和卖出价的平均值）
+                        if (data.has("last_price")) {
+                            String priceStr = data.get("last_price").getAsString();
+                            BigDecimal price = new BigDecimal(priceStr);
+                            log.info("✅ 从金十数据获取黄金价格: ${} (现货金)", price);
+                            return price;
+                        } else if (data.has("bid") && data.has("ask")) {
+                            // 如果没有last_price，使用买卖价的中间价
+                            BigDecimal bid = new BigDecimal(data.get("bid").getAsString());
+                            BigDecimal ask = new BigDecimal(data.get("ask").getAsString());
+                            BigDecimal price = bid.add(ask).divide(new BigDecimal("2"), 2, BigDecimal.ROUND_HALF_UP);
+                            log.info("✅ 从金十数据获取黄金价格: ${} (买卖均价)", price);
+                            return price;
+                        }
+                    } else {
+                        log.warn("⚠️ 金十数据返回错误: {}", jsonData);
+                    }
                 }
             }
         } catch (Exception e) {
-            log.error("从金十数据获取价格失败", e);
+            log.error("❌ 从金十数据获取价格失败", e);
         }
-        return BigDecimal.ZERO;
+        return null;
+    }
+    
+    /**
+     * 从金十数据获取详细行情数据（包含涨跌幅等）
+     * 
+     * @return JsonObject包含完整行情数据，失败返回null
+     */
+    public JsonObject getGoldDetailFromJin10() {
+        try {
+            String url = "https://flash-api.jin10.com/get_quote?symbol=XAUUSD";
+            
+            Request request = new Request.Builder()
+                    .url(url)
+                    .addHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+                    .addHeader("Referer", "https://www.jin10.com/")
+                    .addHeader("Accept", "application/json")
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    String jsonData = response.body().string();
+                    JsonObject jsonObject = JsonParser.parseString(jsonData).getAsJsonObject();
+                    
+                    if (jsonObject.has("code") && jsonObject.get("code").getAsInt() == 0) {
+                        JsonObject data = jsonObject.getAsJsonObject("data");
+                        
+                        // 记录详细行情
+                        log.info("📊 金十数据详细行情:");
+                        log.info("   当前价: {}", data.has("last_price") ? data.get("last_price").getAsString() : "N/A");
+                        log.info("   买入价: {}", data.has("bid") ? data.get("bid").getAsString() : "N/A");
+                        log.info("   卖出价: {}", data.has("ask") ? data.get("ask").getAsString() : "N/A");
+                        log.info("   涨跌额: {}", data.has("change") ? data.get("change").getAsString() : "N/A");
+                        log.info("   涨跌幅: {}", data.has("change_percent") ? data.get("change_percent").getAsString() + "%" : "N/A");
+                        log.info("   最高价: {}", data.has("high") ? data.get("high").getAsString() : "N/A");
+                        log.info("   最低价: {}", data.has("low") ? data.get("low").getAsString() : "N/A");
+                        log.info("   开盘价: {}", data.has("open") ? data.get("open").getAsString() : "N/A");
+                        
+                        return data;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("从金十数据获取详细行情失败", e);
+        }
+        return null;
     }
     
     /**
