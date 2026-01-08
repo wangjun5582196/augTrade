@@ -1,0 +1,135 @@
+server:
+  port: 3131
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: aug-trade
+  
+  # MySQL数据源配置（使用HikariCP连接池）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/test?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 12345678
+    
+    # HikariCP连接池配置
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+
+  # Redis配置（可选）- 如果未安装Redis请保持注释状态
+#  redis:
+#    host: localhost
+#    port: 6379
+#    password:
+#    database: 0
+#    timeout: 3000
+#    lettuce:
+#      pool:
+#        max-active: 8
+#        max-idle: 8
+#        min-idle: 0
+#        max-wait: -1
+
+# MyBatis-Plus配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.ltp.peter.augtrade.entity
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+
+
+# 日志配置
+logging:
+  level:
+    com.ltp.peter.augtrade: debug
+    com.ltp.peter.augtrade.mapper: error
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n'
+  file:
+    name: logs/aug-trade.log
+    max-size: 10MB
+    max-history: 30
+
+# Bybit API配置（正式网 - 模拟交易模式）⭐⭐⭐⭐⭐
+bybit:
+  api:
+    enabled: true                           # ✅ 已启用Bybit
+    key: 你的正式网API-Key                   # 仅用于获取价格（可不填）
+    secret: 你的正式网API-Secret             # 仅用于获取价格（可不填）
+    testnet: false                          # ✅ 正式网（获取真实价格）
+    paper-trading: true                     # ✅ 模拟交易模式（不实际下单）
+  gold:
+    symbol: XAUTUSDT                        # ✅ 黄金永续合约（正确的symbol）
+    min-qty: 10                             # ⭐ 最小0.01金衡盎司
+    max-qty: 100                            # 最大0.1金衡盎司
+    leverage: 2                             # ⭐ 2倍杠杆（正式网建议保守）
+  risk:
+    # 止损止盈模式：fixed（固定）/ atr（动态ATR）
+    mode: fixed                               # ⭐ 使用ATR动态止损止盈
+    
+    # 固定模式参数（mode=fixed时使用）
+    stop-loss-dollars: 8                    # 固定止损$8
+    take-profit-dollars: 24                 # 固定止盈$24（盈亏比3:1）
+    
+    # ATR动态模式参数（mode=atr时使用）
+    atr-stop-loss-multiplier: 1.5           # ATR止损倍数（止损 = ATR * 1.5）
+    atr-take-profit-multiplier: 3.0         # ATR止盈倍数（止盈 = ATR * 3.0）
+    atr-period: 14                          # ATR计算周期
+    atr-min-threshold: 2.0                  # 最小ATR阈值（波动太小不交易）
+    atr-max-threshold: 15.0                 # 最大ATR阈值（波动太大不交易）
+
+# 交易平台配置
+trading:
+  # 比特币交易配置（单仓位模式）
+  gold:
+    symbol: BTCUSDT
+    min-trade-amount: 0.001      # BTC: 0.001个 ⭐
+    max-trade-amount: 0.001      # BTC: 0.001个 ⭐
+    
+  # 风控配置（优化版-适配BTC波动）
+  risk:
+    max-position-size: 0.001     # 最大持仓0.001 BTC
+    max-daily-loss: 500          # 日亏损上限$500
+    max-drawdown-percent: 5.0    # 最大回撤5%
+    fixed-stop-loss: 100         # 固定止损$100（BTC波动大）⚡
+    fixed-take-profit: 250       # 固定止盈$250（盈亏比2.5:1）⚡
+    max-holding-minutes: 30      # 最长持仓30分钟 ⚡
+    
+  # 策略配置
+  strategy:
+    enabled: true
+    interval: 10000  # 策略执行间隔10秒（降频）⚡
+    
+  # 数据采集配置
+  data-collector:
+    enabled: true
+    interval: 60000  # 数据采集间隔（毫秒，币安建议不要太频繁）
+    source: binance  # 数据源: mock/binance/alphavantage
+    
+  # 币安配置
+  binance:
+    symbol: BTCUSDT   # 比特币交易对 ⚡
+    interval: 1m      # K线周期: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+
+# 飞书通知配置
+feishu:
+  notification:
+    enabled: true                          # ✅ 启用飞书通知（默认关闭）
+  webhook:
+    url: "https://open.feishu.cn/open-apis/bot/v2/hook/24c96d2d-c715-481e-87fb-dddf75601c77"  # 飞书机器人Webhook URL
+    secret: ""                             # 飞书机器人签名密钥（如果启用了签名校验，请填写）
