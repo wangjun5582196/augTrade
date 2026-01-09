@@ -125,12 +125,38 @@ public class DashboardController {
                 .filter(order -> order.getExecutedTime() != null && order.getExecutedTime().isAfter(todayStart))
                 .count();
             
-            // 统计胜率
+            // 统计总胜率
             long winTrades = allOrders.stream()
                 .filter(order -> order.getProfitLoss() != null && order.getProfitLoss().compareTo(BigDecimal.ZERO) > 0)
                 .count();
             
             double winRate = totalTrades > 0 ? (winTrades * 100.0 / totalTrades) : 0.0;
+            
+            // 统计今日胜率和盈亏分布
+            List<TradeOrder> todayOrders = allOrders.stream()
+                .filter(order -> order.getExecutedTime() != null && order.getExecutedTime().isAfter(todayStart))
+                .collect(Collectors.toList());
+            
+            long todayWinTrades = todayOrders.stream()
+                .filter(order -> order.getProfitLoss() != null && order.getProfitLoss().compareTo(BigDecimal.ZERO) > 0)
+                .count();
+            
+            long todayLossTrades = todayOrders.stream()
+                .filter(order -> order.getProfitLoss() != null && order.getProfitLoss().compareTo(BigDecimal.ZERO) < 0)
+                .count();
+            
+            double todayWinRate = todayTrades > 0 ? (todayWinTrades * 100.0 / todayTrades) : 0.0;
+            
+            // 计算今日盈利和亏损金额（用于饼图）
+            BigDecimal todayProfit = todayOrders.stream()
+                .filter(order -> order.getProfitLoss() != null && order.getProfitLoss().compareTo(BigDecimal.ZERO) > 0)
+                .map(TradeOrder::getProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            
+            BigDecimal todayLoss = todayOrders.stream()
+                .filter(order -> order.getProfitLoss() != null && order.getProfitLoss().compareTo(BigDecimal.ZERO) < 0)
+                .map(TradeOrder::getProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
             
             // 组装数据
             result.put("success", true);
@@ -142,6 +168,11 @@ public class DashboardController {
             result.put("todayTrades", todayTrades);
             result.put("openPositionsCount", openPositions.size());
             result.put("winRate", String.format("%.2f", winRate));
+            result.put("todayWinRate", String.format("%.2f", todayWinRate));
+            result.put("todayWinTrades", todayWinTrades);
+            result.put("todayLossTrades", todayLossTrades);
+            result.put("todayProfit", todayProfit.setScale(2, RoundingMode.HALF_UP));
+            result.put("todayLoss", todayLoss.abs().setScale(2, RoundingMode.HALF_UP));
             result.put("timestamp", System.currentTimeMillis());
             
         } catch (Exception e) {

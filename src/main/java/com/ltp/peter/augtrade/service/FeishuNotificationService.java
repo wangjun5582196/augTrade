@@ -42,8 +42,9 @@ public class FeishuNotificationService {
     private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
     /**
-     * 发送开仓通知
+     * 发送开仓通知（带重试机制）
      * 
+     * @param positionId 持仓ID
      * @param symbol 交易品种
      * @param side 方向（LONG/SHORT）
      * @param entryPrice 开仓价格
@@ -52,7 +53,7 @@ public class FeishuNotificationService {
      * @param takeProfit 止盈价
      * @param strategy 策略名称
      */
-    public void notifyOpenPosition(String symbol, String side, BigDecimal entryPrice, 
+    public void notifyOpenPosition(String positionId, String symbol, String side, BigDecimal entryPrice, 
                                     BigDecimal quantity, BigDecimal stopLoss, 
                                     BigDecimal takeProfit, String strategy) {
         if (!enabled || webhookUrl == null || webhookUrl.isEmpty()) {
@@ -68,6 +69,7 @@ public class FeishuNotificationService {
                 "💰 开仓通知",
                 color,
                 String.format(
+                    "**订单ID**: %s\n" +
                     "**交易品种**: %s\n" +
                     "**方向**: %s\n" +
                     "**开仓价**: $%s\n" +
@@ -76,6 +78,7 @@ public class FeishuNotificationService {
                     "**止盈价**: $%s\n" +
                     "**策略**: %s\n" +
                     "**时间**: %s",
+                    positionId,
                     symbol,
                     direction,
                     entryPrice.toPlainString(),
@@ -87,17 +90,18 @@ public class FeishuNotificationService {
                 )
             );
             
-            sendMessage(message);
-            log.info("✅ 飞书开仓通知发送成功");
+            // ✨ 使用重试机制发送
+            sendMessageWithRetry(message, "开仓通知");
             
         } catch (Exception e) {
-            log.error("❌ 飞书开仓通知发送失败", e);
+            log.error("❌ 飞书开仓通知发送失败 - {}", e.getMessage(), e);
         }
     }
     
     /**
-     * 发送平仓通知
+     * 发送平仓通知（带重试机制）
      * 
+     * @param positionId 持仓ID
      * @param symbol 交易品种
      * @param side 方向
      * @param entryPrice 开仓价
@@ -107,7 +111,7 @@ public class FeishuNotificationService {
      * @param holdingTime 持仓时间（秒）
      * @param reason 平仓原因
      */
-    public void notifyClosePosition(String symbol, String side, BigDecimal entryPrice,
+    public void notifyClosePosition(String positionId, String symbol, String side, BigDecimal entryPrice,
                                      BigDecimal exitPrice, BigDecimal quantity,
                                      BigDecimal profit, long holdingTime, String reason) {
         if (!enabled || webhookUrl == null || webhookUrl.isEmpty()) {
@@ -131,6 +135,7 @@ public class FeishuNotificationService {
                 "🔔 平仓通知",
                 color,
                 String.format(
+                    "**订单ID**: %s\n" +
                     "**交易品种**: %s\n" +
                     "**方向**: %s\n" +
                     "**开仓价**: $%s\n" +
@@ -140,6 +145,7 @@ public class FeishuNotificationService {
                     "**持仓时间**: %s\n" +
                     "**平仓原因**: %s\n" +
                     "**时间**: %s",
+                    positionId,
                     symbol,
                     direction,
                     entryPrice.toPlainString(),
@@ -153,17 +159,18 @@ public class FeishuNotificationService {
                 )
             );
             
-            sendMessage(message);
-            log.info("✅ 飞书平仓通知发送成功");
+            // ✨ 使用重试机制发送
+            sendMessageWithRetry(message, "平仓通知");
             
         } catch (Exception e) {
-            log.error("❌ 飞书平仓通知发送失败", e);
+            log.error("❌ 飞书平仓通知发送失败 - {}", e.getMessage(), e);
         }
     }
     
     /**
-     * 发送止损/止盈通知
+     * 发送止损/止盈通知（带重试机制）
      * 
+     * @param positionId 持仓ID
      * @param symbol 交易品种
      * @param side 方向
      * @param entryPrice 开仓价
@@ -172,7 +179,7 @@ public class FeishuNotificationService {
      * @param profit 盈亏
      * @param type 类型（止损/止盈）
      */
-    public void notifyStopLossOrTakeProfit(String symbol, String side, BigDecimal entryPrice,
+    public void notifyStopLossOrTakeProfit(String positionId, String symbol, String side, BigDecimal entryPrice,
                                             BigDecimal exitPrice, BigDecimal quantity,
                                             BigDecimal profit, String type) {
         if (!enabled || webhookUrl == null || webhookUrl.isEmpty()) {
@@ -189,6 +196,7 @@ public class FeishuNotificationService {
                 emoji + " " + type + "通知",
                 color,
                 String.format(
+                    "**订单ID**: %s\n" +
                     "**交易品种**: %s\n" +
                     "**方向**: %s\n" +
                     "**开仓价**: $%s\n" +
@@ -197,6 +205,7 @@ public class FeishuNotificationService {
                     "**盈亏**: $%s\n" +
                     "**触发类型**: %s\n" +
                     "**时间**: %s",
+                    positionId,
                     symbol,
                     direction,
                     entryPrice.toPlainString(),
@@ -208,24 +217,25 @@ public class FeishuNotificationService {
                 )
             );
             
-            sendMessage(message);
-            log.info("✅ 飞书{}通知发送成功", type);
+            // ✨ 使用重试机制发送
+            sendMessageWithRetry(message, type + "通知");
             
         } catch (Exception e) {
-            log.error("❌ 飞书{}通知发送失败", type, e);
+            log.error("❌ 飞书{}通知发送失败 - {}", type, e.getMessage(), e);
         }
     }
     
     /**
-     * 发送信号反转平仓通知
+     * 发送信号反转平仓通知（带重试机制）
      * 
+     * @param positionId 持仓ID
      * @param symbol 交易品种
      * @param side 原方向
      * @param entryPrice 开仓价
      * @param exitPrice 平仓价
      * @param profit 盈亏
      */
-    public void notifySignalReversalClose(String symbol, String side, BigDecimal entryPrice,
+    public void notifySignalReversalClose(String positionId, String symbol, String side, BigDecimal entryPrice,
                                            BigDecimal exitPrice, BigDecimal profit) {
         if (!enabled || webhookUrl == null || webhookUrl.isEmpty()) {
             log.debug("飞书通知未启用或未配置Webhook");
@@ -241,6 +251,7 @@ public class FeishuNotificationService {
                 "⚠️ 信号反转平仓",
                 color,
                 String.format(
+                    "**订单ID**: %s\n" +
                     "**交易品种**: %s\n" +
                     "**原方向**: %s\n" +
                     "**开仓价**: $%s\n" +
@@ -248,6 +259,7 @@ public class FeishuNotificationService {
                     "**盈亏**: $%s\n" +
                     "**原因**: 策略信号反转\n" +
                     "**时间**: %s",
+                    positionId,
                     symbol,
                     direction,
                     entryPrice.toPlainString(),
@@ -257,11 +269,11 @@ public class FeishuNotificationService {
                 )
             );
             
-            sendMessage(message);
-            log.info("✅ 飞书信号反转通知发送成功");
+            // ✨ 使用重试机制发送
+            sendMessageWithRetry(message, "信号反转通知");
             
         } catch (Exception e) {
-            log.error("❌ 飞书信号反转通知发送失败", e);
+            log.error("❌ 飞书信号反转通知发送失败 - {}", e.getMessage(), e);
         }
     }
     
@@ -296,6 +308,42 @@ public class FeishuNotificationService {
     }
     
     /**
+     * ✨ 带重试机制的消息发送
+     * 
+     * @param message 消息内容
+     * @param notificationType 通知类型（用于日志）
+     */
+    private void sendMessageWithRetry(String message, String notificationType) {
+        int maxRetries = 3;
+        int retryDelay = 1000; // 1秒
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                sendMessage(message);
+                log.info("✅ 飞书{}发送成功（尝试{}/{}）", notificationType, attempt, maxRetries);
+                return; // 成功发送，退出
+                
+            } catch (Exception e) {
+                log.warn("⚠️ 飞书{}发送失败（尝试{}/{}）- {}", 
+                        notificationType, attempt, maxRetries, e.getMessage());
+                
+                if (attempt < maxRetries) {
+                    try {
+                        log.debug("等待{}ms后重试...", retryDelay);
+                        Thread.sleep(retryDelay);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.error("❌ 重试被中断");
+                        return;
+                    }
+                } else {
+                    log.error("❌ 飞书{}发送最终失败，已重试{}次", notificationType, maxRetries);
+                }
+            }
+        }
+    }
+    
+    /**
      * 发送消息到飞书（支持签名校验）
      */
     private void sendMessage(String message) throws IOException, InterruptedException {
@@ -322,9 +370,11 @@ public class FeishuNotificationService {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         
         if (response.statusCode() != 200) {
-            log.error("飞书通知发送失败，状态码: {}, 响应: {}", response.statusCode(), response.body());
+            String errorMsg = String.format("状态码: %d, 响应: %s", response.statusCode(), response.body());
+            log.error("飞书API返回错误 - {}", errorMsg);
+            throw new IOException(errorMsg);
         } else {
-            log.debug("飞书通知发送成功，响应: {}", response.body());
+            log.debug("飞书API响应成功: {}", response.body());
         }
     }
     

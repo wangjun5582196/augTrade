@@ -201,11 +201,15 @@ public class PaperTradingService {
         
         // 🔔 发送飞书开仓通知
         try {
+            log.info("📤 准备发送飞书开仓通知 - 订单ID: {}, {} {} @ ${}", 
+                    position.getPositionId(), symbol, side, entryPrice);
             feishuNotificationService.notifyOpenPosition(
-                symbol, side, entryPrice, quantity, stopLoss, takeProfit, strategyName
+                position.getPositionId(), symbol, side, entryPrice, quantity, stopLoss, takeProfit, strategyName
             );
+            log.info("✅ 飞书开仓通知已触发发送 - 订单ID: {}", position.getPositionId());
         } catch (Exception e) {
-            log.error("发送飞书开仓通知失败", e);
+            log.error("❌ 发送飞书开仓通知异常 - 订单ID: {}, {} {} @ ${}: {}", 
+                    position.getPositionId(), symbol, side, entryPrice, e.getMessage(), e);
         }
         
         return position;
@@ -316,30 +320,39 @@ public class PaperTradingService {
         try {
             long holdingTime = java.time.Duration.between(position.getOpenTime(), LocalDateTime.now()).getSeconds();
             
+            log.info("📤 准备发送飞书平仓通知 - 订单ID: {}, {} {} @ ${}, 盈亏: ${}, 原因: {}", 
+                    position.getPositionId(), position.getSymbol(), position.getSide(), 
+                    exitPrice, realizedPnL, reasonText);
+            
             if ("STOP_LOSS".equals(reason)) {
                 feishuNotificationService.notifyStopLossOrTakeProfit(
-                    position.getSymbol(), position.getSide(), position.getEntryPrice(),
+                    position.getPositionId(), position.getSymbol(), position.getSide(), position.getEntryPrice(),
                     exitPrice, position.getQuantity(), realizedPnL, "止损"
                 );
+                log.info("✅ 飞书止损通知已触发发送 - 订单ID: {}", position.getPositionId());
             } else if ("TAKE_PROFIT".equals(reason)) {
                 feishuNotificationService.notifyStopLossOrTakeProfit(
-                    position.getSymbol(), position.getSide(), position.getEntryPrice(),
+                    position.getPositionId(), position.getSymbol(), position.getSide(), position.getEntryPrice(),
                     exitPrice, position.getQuantity(), realizedPnL, "止盈"
                 );
+                log.info("✅ 飞书止盈通知已触发发送 - 订单ID: {}", position.getPositionId());
             } else if ("SIGNAL_REVERSAL".equals(reason)) {
                 feishuNotificationService.notifySignalReversalClose(
-                    position.getSymbol(), position.getSide(), position.getEntryPrice(),
+                    position.getPositionId(), position.getSymbol(), position.getSide(), position.getEntryPrice(),
                     exitPrice, realizedPnL
                 );
+                log.info("✅ 飞书信号反转通知已触发发送 - 订单ID: {}", position.getPositionId());
             } else {
                 // 其他平仓原因使用通用平仓通知
                 feishuNotificationService.notifyClosePosition(
-                    position.getSymbol(), position.getSide(), position.getEntryPrice(),
+                    position.getPositionId(), position.getSymbol(), position.getSide(), position.getEntryPrice(),
                     exitPrice, position.getQuantity(), realizedPnL, holdingTime, reasonText
                 );
+                log.info("✅ 飞书通用平仓通知已触发发送 - 订单ID: {}", position.getPositionId());
             }
         } catch (Exception e) {
-            log.error("发送飞书平仓通知失败", e);
+            log.error("❌ 发送飞书平仓通知异常 - 订单ID: {}, {} {} 盈亏${}: {}", 
+                    position.getPositionId(), position.getSymbol(), reasonText, realizedPnL, e.getMessage(), e);
         }
         
         // 从持仓列表中移除

@@ -111,9 +111,9 @@ public class TradingScheduler {
     @Value("${bybit.risk.atr-max-threshold:15.0}")
     private double atrMaxThreshold;
     
-    // 信号反转冷却期控制
-    private LocalDateTime lastReversalTime = null;
-    private static final int REVERSAL_COOLDOWN_SECONDS = 300; // 300秒冷却（5分钟）- 减少频繁反向交易
+    // 冷却期控制 - 所有平仓类型都需要冷却
+    private LocalDateTime lastCloseTime = null;
+    private static final int CLOSE_COOLDOWN_SECONDS = 300; // 300秒冷却（5分钟）- 防止止损后立即开仓
     
     // 持仓时间管理常量
     private static final int MAX_HOLDING_SECONDS = 1800; // 最大持仓30分钟
@@ -207,11 +207,11 @@ public class TradingScheduler {
                     tradingSignal.getType(), tradingSignal.getStrength(), 
                     tradingSignal.getScore(), tradingSignal.getReason());
             
-            // 3. 检查冷却期
-            if (lastReversalTime != null) {
-                long secondsSinceReversal = Duration.between(lastReversalTime, LocalDateTime.now()).getSeconds();
-                if (secondsSinceReversal < REVERSAL_COOLDOWN_SECONDS) {
-                    log.info("⏸️ 冷却期中（剩余{}秒），暂不开新仓", REVERSAL_COOLDOWN_SECONDS - secondsSinceReversal);
+            // 3. 检查冷却期（包括止损/止盈/信号反转的冷却）
+            if (lastCloseTime != null) {
+                long secondsSinceClose = Duration.between(lastCloseTime, LocalDateTime.now()).getSeconds();
+                if (secondsSinceClose < CLOSE_COOLDOWN_SECONDS) {
+                    log.info("⏸️ 平仓冷却期中（剩余{}秒），防止频繁开仓", CLOSE_COOLDOWN_SECONDS - secondsSinceClose);
                     log.info("========================================");
                     return;
                 }
@@ -231,14 +231,14 @@ public class TradingScheduler {
                         log.warn("⏰ 超过最大持仓时间{}分钟且盈利${}，强制平仓保护利润", 
                                 MAX_HOLDING_SECONDS / 60, unrealizedPnL);
                         paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
-                        lastReversalTime = LocalDateTime.now();
+                        lastCloseTime = LocalDateTime.now();
                         log.info("========================================");
                         return;
                     } else if (unrealizedPnL.compareTo(new BigDecimal(stopLossDollars).multiply(new BigDecimal("-0.5"))) < 0) {
                         log.warn("⏰ 超过最大持仓时间{}分钟且亏损${}，强制平仓止损", 
                                 MAX_HOLDING_SECONDS / 60, unrealizedPnL);
                         paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
-                        lastReversalTime = LocalDateTime.now();
+                        lastCloseTime = LocalDateTime.now();
                         log.info("========================================");
                         return;
                     }
@@ -295,8 +295,8 @@ public class TradingScheduler {
                     log.warn("⚠️ 信号反转！持有多头但出现强做空信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
                              tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
-                    lastReversalTime = LocalDateTime.now();
-                    log.info("🔒 启动{}秒冷却期，防止频繁交易", REVERSAL_COOLDOWN_SECONDS);
+                    lastCloseTime = LocalDateTime.now();
+                    log.info("🔒 启动{}秒冷却期，防止频繁交易", CLOSE_COOLDOWN_SECONDS);
                     log.info("========================================");
                     return;
                 }
@@ -324,8 +324,8 @@ public class TradingScheduler {
                     log.warn("⚠️ 信号反转！持有空头但出现强做多信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
                              tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
-                    lastReversalTime = LocalDateTime.now();
-                    log.info("🔒 启动{}秒冷却期，防止频繁交易", REVERSAL_COOLDOWN_SECONDS);
+                    lastCloseTime = LocalDateTime.now();
+                    log.info("🔒 启动{}秒冷却期，防止频繁交易", CLOSE_COOLDOWN_SECONDS);
                     log.info("========================================");
                     return;
                 }
@@ -512,6 +512,9 @@ public class TradingScheduler {
                 return;
             }
             
+            // 记录更新前的持仓状态
+            boolean hadPosition = paperTradingService.hasOpenPosition();
+            
             // ✨ 修复：增强网络异常处理，确保止损止盈检查必定执行
             BigDecimal currentPrice = null;
             int retryCount = 0;
@@ -547,6 +550,14 @@ public class TradingScheduler {
             // 更新持仓价格，自动检查止损止盈
             paperTradingService.updatePositions(currentPrice);
             
+            // ✨ 关键修复：检测是否因止损/止盈而平仓
+            boolean hasPositionNow = paperTradingService.hasOpenPosition();
+            if (hadPosition && !hasPositionNow) {
+                // 持仓已被平掉（止损或止盈），启动冷却期
+                lastCloseTime = LocalDateTime.now();
+                log.info("🔒 检测到止损/止盈平仓，启动{}秒冷却期，防止立即开新仓", CLOSE_COOLDOWN_SECONDS);
+            }
+            
             // 显示持仓状态
             com.ltp.peter.augtrade.entity.PaperPosition position = paperTradingService.getCurrentPosition();
             if (position != null) {
@@ -572,10 +583,10 @@ public class TradingScheduler {
             
             AdvancedTradingStrategyService.Signal signal = advancedStrategyService.mlEnhancedWilliamsStrategy(binanceSymbol);
             
-            if (lastReversalTime != null) {
-                long secondsSinceReversal = Duration.between(lastReversalTime, LocalDateTime.now()).getSeconds();
-                if (secondsSinceReversal < REVERSAL_COOLDOWN_SECONDS) {
-                    log.info("⏸️ 信号反转冷却期（{}秒），暂不开新仓", REVERSAL_COOLDOWN_SECONDS - secondsSinceReversal);
+            if (lastCloseTime != null) {
+                long secondsSinceClose = Duration.between(lastCloseTime, LocalDateTime.now()).getSeconds();
+                if (secondsSinceClose < CLOSE_COOLDOWN_SECONDS) {
+                    log.info("⏸️ 平仓冷却期（{}秒），暂不开新仓", CLOSE_COOLDOWN_SECONDS - secondsSinceClose);
                     log.info("========================================");
                     return;
                 }
@@ -657,8 +668,8 @@ public class TradingScheduler {
             if (longPosition != null && signal == AdvancedTradingStrategyService.Signal.SELL) {
                 log.warn("⚠️ 信号反转！持有多头但出现做空信号，立即平仓止损");
                 executionService.executeSell(binanceSymbol, longPosition.getQuantity(), "信号反转止损");
-                lastReversalTime = LocalDateTime.now(); // 记录反转时间
-                log.info("🔒 启动30秒冷却期，防止立即开反向仓位");
+                lastCloseTime = LocalDateTime.now();
+                log.info("🔒 启动{}秒冷却期，防止立即开反向仓位", CLOSE_COOLDOWN_SECONDS);
                 return;
             }
             
@@ -666,8 +677,8 @@ public class TradingScheduler {
             if (shortPosition != null && signal == AdvancedTradingStrategyService.Signal.BUY) {
                 log.warn("⚠️ 信号反转！持有空头但出现做多信号，立即平仓止损");
                 executionService.executeBuyToCover(binanceSymbol, shortPosition.getQuantity(), "信号反转止损");
-                lastReversalTime = LocalDateTime.now(); // 记录反转时间
-                log.info("🔒 启动30秒冷却期，防止立即开反向仓位");
+                lastCloseTime = LocalDateTime.now();
+                log.info("🔒 启动{}秒冷却期，防止立即开反向仓位", CLOSE_COOLDOWN_SECONDS);
                 return;
             }
         } catch (Exception e) {
