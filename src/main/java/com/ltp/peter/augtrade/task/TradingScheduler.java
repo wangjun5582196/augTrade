@@ -115,11 +115,11 @@ public class TradingScheduler {
     private LocalDateTime lastCloseTime = null;
     private static final int CLOSE_COOLDOWN_SECONDS = 300; // 300秒冷却（5分钟）- 防止止损后立即开仓
     
-    // 持仓时间管理常量
+    // 持仓时间管理常量 - ✨ 优化：增加持仓保护期，避免过早平仓
     private static final int MAX_HOLDING_SECONDS = 1800; // 最大持仓30分钟
-    private static final int MIN_HOLDING_SECONDS_DEFAULT = 300; // 默认5分钟
-    private static final int MIN_HOLDING_SECONDS_PROFIT = 600; // 盈利时10分钟
-    private static final int MIN_HOLDING_SECONDS_BIG_PROFIT = 900; // 大盈利时15分钟
+    private static final int MIN_HOLDING_SECONDS_DEFAULT = 600; // 默认10分钟（从5分钟增加）
+    private static final int MIN_HOLDING_SECONDS_PROFIT = 900; // 盈利时15分钟（从10分钟增加）
+    private static final int MIN_HOLDING_SECONDS_BIG_PROFIT = 1200; // 大盈利时20分钟（从15分钟增加）
     
     /**
      * Bybit数据采集任务 - 每60秒执行一次
@@ -283,9 +283,9 @@ public class TradingScheduler {
                         return;
                     }
                     
-                    // ✨ 信号强度检查：只在强信号时反转
-                    if (tradingSignal.getStrength() < 75) {
-                        log.info("⚠️ 反转信号强度{}不足（需要≥75），持仓亏损${}但不平仓", 
+                    // ✨ 信号强度检查：只在强信号时反转（提高阈值避免频繁反转）
+                    if (tradingSignal.getStrength() < 85) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥85），持仓亏损${}但不平仓", 
                                 tradingSignal.getStrength(), unrealizedPnL);
                         log.info("========================================");
                         return;
@@ -312,9 +312,9 @@ public class TradingScheduler {
                         return;
                     }
                     
-                    // ✨ 信号强度检查：只在强信号时反转
-                    if (tradingSignal.getStrength() < 75) {
-                        log.info("⚠️ 反转信号强度{}不足（需要≥75），持仓亏损${}但不平仓", 
+                    // ✨ 信号强度检查：只在强信号时反转（提高阈值避免频繁反转）
+                    if (tradingSignal.getStrength() < 85) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥85），持仓亏损${}但不平仓", 
                                 tradingSignal.getStrength(), unrealizedPnL);
                         log.info("========================================");
                         return;
@@ -331,13 +331,23 @@ public class TradingScheduler {
                 }
             }
             
-            // 5. 根据信号执行交易
+            // 5. 根据信号执行交易（✨ 优化：增加开仓信号强度要求）
             if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY) {
-                log.info("🔥 收到做多信号！准备做多黄金");
-                executeBybitBuy(currentPrice);
+                // ✨ 开仓需要更高的信号强度（≥70）
+                if (tradingSignal.getStrength() < 70) {
+                    log.info("⏸️ 做多信号强度{}不足（需要≥70），暂不开仓", tradingSignal.getStrength());
+                } else {
+                    log.info("🔥 收到高质量做多信号（强度{}）！准备做多黄金", tradingSignal.getStrength());
+                    executeBybitBuy(currentPrice);
+                }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
-                log.info("📉 收到做空信号！准备做空黄金");
-                executeBybitSell(currentPrice);
+                // ✨ 开仓需要更高的信号强度（≥70）
+                if (tradingSignal.getStrength() < 70) {
+                    log.info("⏸️ 做空信号强度{}不足（需要≥70），暂不开仓", tradingSignal.getStrength());
+                } else {
+                    log.info("📉 收到高质量做空信号（强度{}）！准备做空黄金", tradingSignal.getStrength());
+                    executeBybitSell(currentPrice);
+                }
             } else {
                 log.debug("⏸️ 保持观望，等待高质量信号");
             }

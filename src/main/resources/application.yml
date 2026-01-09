@@ -80,15 +80,15 @@ bybit:
     leverage: 2                             # ⭐ 2倍杠杆（正式网建议保守）
   risk:
     # 止损止盈模式：fixed（固定）/ atr（动态ATR）
-    mode: fixed                               # ⭐ 使用ATR动态止损止盈
+    mode: fixed                               # ⭐ 固定模式（更可控）
     
-    # 固定模式参数（mode=fixed时使用）
-    stop-loss-dollars: 8                    # 固定止损$8
-    take-profit-dollars: 24                 # 固定止盈$24（盈亏比3:1）
+    # 固定模式参数（mode=fixed时使用）- ✨ 优化后的配置
+    stop-loss-dollars: 15                   # 固定止损$15（增加容错空间）
+    take-profit-dollars: 30                 # 固定止盈$30（盈亏比2:1，更易达到）
     
     # ATR动态模式参数（mode=atr时使用）
-    atr-stop-loss-multiplier: 1.5           # ATR止损倍数（止损 = ATR * 1.5）
-    atr-take-profit-multiplier: 3.0         # ATR止盈倍数（止盈 = ATR * 3.0）
+    atr-stop-loss-multiplier: 2.0           # ATR止损倍数（增加到2.0，更宽松）
+    atr-take-profit-multiplier: 3.5         # ATR止盈倍数（保持激进）
     atr-period: 14                          # ATR计算周期
     atr-min-threshold: 2.0                  # 最小ATR阈值（波动太小不交易）
     atr-max-threshold: 15.0                 # 最大ATR阈值（波动太大不交易）
