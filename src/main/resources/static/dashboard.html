@@ -819,7 +819,7 @@
         // Load recent trades
         async function loadRecentTrades() {
             try {
-                const response = await fetch('/api/dashboard/recent-trades?limit=10');
+                const response = await fetch('/api/dashboard/recent-trades?limit=20');
                 const data = await response.json();
                 
                 const container = document.getElementById('recentTradesContent');
