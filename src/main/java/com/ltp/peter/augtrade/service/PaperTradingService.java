@@ -381,28 +381,105 @@ public class PaperTradingService {
     }
     
     /**
-     * 获取统计数据
+     * ✨ 从数据库获取今日统计数据（重启后数据仍然有效）
      */
     public String getStatistics() {
-        double winRate = totalTrades > 0 ? (double) winTrades / totalTrades * 100 : 0;
-        return String.format("总交易: %d单 | 盈利: %d单 | 亏损: %d单 | 胜率: %.1f%% | 累计盈亏: $%.2f",
-                totalTrades, winTrades, lossTrades, winRate, totalProfit);
+        try {
+            // 从数据库实时查询今日数据
+            int dbTotalTrades = getTotalTrades();
+            int dbWinTrades = getWinTrades();
+            int dbLossTrades = getLossTrades();
+            double dbTotalProfit = getTotalProfit();
+            
+            double winRate = dbTotalTrades > 0 ? (double) dbWinTrades / dbTotalTrades * 100 : 0;
+            return String.format("总交易: %d单 | 盈利: %d单 | 亏损: %d单 | 胜率: %.1f%% | 累计盈亏: $%.2f",
+                    dbTotalTrades, dbWinTrades, dbLossTrades, winRate, dbTotalProfit);
+        } catch (Exception e) {
+            log.error("获取统计数据失败", e);
+            return "统计数据获取失败";
+        }
     }
     
+    /**
+     * ✨ 从数据库查询今日总交易数
+     */
     public int getTotalTrades() {
-        return totalTrades;
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> query = 
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            query.apply("DATE(create_time) = CURDATE()")
+                 .ne("status", "OPEN");
+            
+            return tradeOrderMapper.selectCount(query).intValue();
+        } catch (Exception e) {
+            log.error("查询总交易数失败", e);
+            return 0;
+        }
     }
     
+    /**
+     * ✨ 从数据库查询今日盈利笔数
+     */
     public int getWinTrades() {
-        return winTrades;
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> query = 
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            query.apply("DATE(create_time) = CURDATE()")
+                 .ne("status", "OPEN")
+                 .gt("profit_loss", 0);
+            
+            return tradeOrderMapper.selectCount(query).intValue();
+        } catch (Exception e) {
+            log.error("查询盈利笔数失败", e);
+            return 0;
+        }
     }
     
+    /**
+     * ✨ 从数据库查询今日亏损笔数
+     */
     public int getLossTrades() {
-        return lossTrades;
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> query = 
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            query.apply("DATE(create_time) = CURDATE()")
+                 .ne("status", "OPEN")
+                 .lt("profit_loss", 0);
+            
+            return tradeOrderMapper.selectCount(query).intValue();
+        } catch (Exception e) {
+            log.error("查询亏损笔数失败", e);
+            return 0;
+        }
     }
     
+    /**
+     * ✨ 从数据库查询今日总盈亏
+     */
     public double getTotalProfit() {
-        return totalProfit;
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> query = 
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            query.apply("DATE(create_time) = CURDATE()")
+                 .ne("status", "OPEN");
+            
+            List<TradeOrder> orders = tradeOrderMapper.selectList(query);
+            
+            // 手动计算总和（更可靠）
+            double total = 0.0;
+            for (TradeOrder order : orders) {
+                if (order.getProfitLoss() != null) {
+                    total += order.getProfitLoss().doubleValue();
+                }
+            }
+            
+            log.debug("今日总盈亏: {} (共{}笔交易)", total, orders.size());
+            return total;
+            
+        } catch (Exception e) {
+            log.error("查询总盈亏失败", e);
+            return 0.0;
+        }
     }
     
     /**
