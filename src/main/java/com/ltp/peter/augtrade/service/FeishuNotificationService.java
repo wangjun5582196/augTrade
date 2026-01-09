@@ -402,6 +402,67 @@ public class FeishuNotificationService {
     }
     
     /**
+     * 发送持仓和统计报告（定期报告）
+     * 
+     * @param hasPosition 是否有持仓
+     * @param positionInfo 持仓信息（如果有）
+     * @param todayStats 今日统计信息
+     */
+    public void notifyPositionAndStats(boolean hasPosition, String positionInfo, String todayStats) {
+        if (!enabled || webhookUrl == null || webhookUrl.isEmpty()) {
+            log.debug("飞书通知未启用或未配置Webhook");
+            return;
+        }
+        
+        try {
+            String content;
+            String color = "blue";
+            
+            if (hasPosition) {
+                // 有持仓时显示持仓信息 + 统计
+                content = String.format(
+                    "**📊 当前持仓**\n" +
+                    "%s\n\n" +
+                    "**📈 今日统计**\n" +
+                    "%s\n\n" +
+                    "**时间**: %s",
+                    positionInfo,
+                    todayStats,
+                    LocalDateTime.now().format(formatter)
+                );
+                
+                // 根据持仓盈亏设置颜色
+                if (positionInfo.contains("盈利")) {
+                    color = "green";
+                } else if (positionInfo.contains("亏损")) {
+                    color = "orange";
+                }
+            } else {
+                // 无持仓时只显示统计
+                content = String.format(
+                    "**📊 当前持仓**: 无\n\n" +
+                    "**📈 今日统计**\n" +
+                    "%s\n\n" +
+                    "**时间**: %s",
+                    todayStats,
+                    LocalDateTime.now().format(formatter)
+                );
+            }
+            
+            String message = buildCardMessage(
+                "📋 交易报告",
+                color,
+                content
+            );
+            
+            sendMessageWithRetry(message, "定期报告");
+            
+        } catch (Exception e) {
+            log.error("❌ 飞书定期报告发送失败 - {}", e.getMessage(), e);
+        }
+    }
+    
+    /**
      * 测试通知
      */
     public void testNotification() {

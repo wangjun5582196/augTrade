@@ -60,6 +60,9 @@ public class TradingScheduler {
     @Autowired
     private com.ltp.peter.augtrade.service.core.indicator.ATRCalculator atrCalculator;
     
+    @Autowired
+    private FeishuNotificationService feishuNotificationService;
+    
     @Value("${trading.gold.symbol:XAUUSD}")
     private String symbol;
     
@@ -762,6 +765,113 @@ public class TradingScheduler {
             log.info("系统健康检查 - 🎯 模拟交易模式运行中");
         } else {
             log.info("系统健康检查 - 💰 真实交易模式运行中");
+        }
+    }
+    
+    /**
+     * ✨ 新增：定期发送持仓和统计报告到飞书
+     * 每30分钟执行一次，实时关注持仓情况
+     */
+    @Scheduled(cron = "0 */5 * * * ?")  // 每30分钟执行一次（如 10:00, 10:30, 11:00...）
+    public void sendPeriodicReport() {
+        if (!paperTrading) {
+            return; // 只在模拟交易模式下发送
+        }
+        
+        try {
+            log.info("========================================");
+            log.info("【定期报告】开始生成飞书报告");
+            
+            // 1. 检查是否有持仓
+            boolean hasPosition = paperTradingService.hasOpenPosition();
+            String positionInfo = "";
+            
+            if (hasPosition) {
+                com.ltp.peter.augtrade.entity.PaperPosition position = paperTradingService.getCurrentPosition();
+                if (position != null) {
+                    // 获取当前价格
+                    BigDecimal currentPrice = null;
+                    try {
+                        currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
+                    } catch (Exception e) {
+                        currentPrice = position.getCurrentPrice();
+                    }
+                    
+                    // 计算持仓时间
+                    long holdingSeconds = Duration.between(position.getOpenTime(), LocalDateTime.now()).getSeconds();
+                    long hours = holdingSeconds / 3600;
+                    long minutes = (holdingSeconds % 3600) / 60;
+                    String holdingTime = String.format("%d小时%d分钟", hours, minutes);
+                    
+                    // 构建持仓信息
+                    String direction = "LONG".equals(position.getSide()) ? "🔥 做多" : "📉 做空";
+                    String profitStatus = position.getUnrealizedPnL().compareTo(BigDecimal.ZERO) > 0 ? 
+                            "💰 盈利" : "📉 亏损";
+                    
+                    positionInfo = String.format(
+                        "**品种**: %s\n" +
+                        "**方向**: %s\n" +
+                        "**入场价**: $%s\n" +
+                        "**当前价**: $%s\n" +
+                        "**止损价**: $%s\n" +
+                        "**止盈价**: $%s\n" +
+                        "**数量**: %s 盎司\n" +
+                        "**未实现盈亏**: %s $%s\n" +
+                        "**持仓时长**: %s",
+                        position.getSymbol(),
+                        direction,
+                        position.getEntryPrice().toPlainString(),
+                        currentPrice.toPlainString(),
+                        position.getStopLossPrice().toPlainString(),
+                        position.getTakeProfitPrice().toPlainString(),
+                        position.getQuantity().toPlainString(),
+                        profitStatus,
+                        position.getUnrealizedPnL().abs().toPlainString(),
+                        holdingTime
+                    );
+                }
+            }
+            
+            // 2. 获取今日统计
+            int totalTrades = paperTradingService.getTotalTrades();
+            int winTrades = paperTradingService.getWinTrades();
+            int lossTrades = paperTradingService.getLossTrades();
+            double totalProfit = paperTradingService.getTotalProfit();
+            
+            String todayStats;
+            if (totalTrades == 0) {
+                todayStats = "**今日交易**: 0笔\n" +
+                             "**提示**: 暂无交易记录";
+            } else {
+                double winRate = (double) winTrades / totalTrades * 100;
+                String winRateEmoji = winRate >= 55 ? "✅" : (winRate >= 45 ? "⚠️" : "❌");
+                String profitEmoji = totalProfit > 0 ? "✅" : "❌";
+                
+                todayStats = String.format(
+                    "**总交易**: %d笔\n" +
+                    "**盈利**: %d笔 | **亏损**: %d笔\n" +
+                    "**胜率**: %s %.1f%%\n" +
+                    "**累计盈亏**: %s $%.2f\n" +
+                    "**平均每笔**: $%.2f",
+                    totalTrades,
+                    winTrades,
+                    lossTrades,
+                    winRateEmoji,
+                    winRate,
+                    profitEmoji,
+                    totalProfit,
+                    totalProfit / totalTrades
+                );
+            }
+            
+            // 3. 发送飞书通知
+            feishuNotificationService.notifyPositionAndStats(hasPosition, positionInfo, todayStats);
+            
+            log.info("✅ 定期报告已发送到飞书");
+            log.info("========================================");
+            
+        } catch (Exception e) {
+            log.error("❌ 定期报告生成失败", e);
         }
     }
     
