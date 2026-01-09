@@ -38,6 +38,12 @@ public class FeishuNotificationService {
     @Value("${feishu.notification.enabled:false}")
     private boolean enabled;
     
+    @Value("${feishu.mention.enabled:false}")
+    private boolean mentionEnabled;
+    
+    @Value("${feishu.mention.user-id:}")
+    private String mentionUserId;
+    
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
@@ -87,7 +93,8 @@ public class FeishuNotificationService {
                     takeProfit.toPlainString(),
                     strategy,
                     LocalDateTime.now().format(formatter)
-                )
+                ),
+                true  // ✅ 启用@提醒
             );
             
             // ✨ 使用重试机制发送
@@ -156,7 +163,8 @@ public class FeishuNotificationService {
                     holdingTimeStr,
                     reason,
                     LocalDateTime.now().format(formatter)
-                )
+                ),
+                true  // ✅ 启用@提醒
             );
             
             // ✨ 使用重试机制发送
@@ -214,7 +222,8 @@ public class FeishuNotificationService {
                     profit.toPlainString(),
                     type,
                     LocalDateTime.now().format(formatter)
-                )
+                ),
+                true  // ✅ 启用@提醒
             );
             
             // ✨ 使用重试机制发送
@@ -266,7 +275,8 @@ public class FeishuNotificationService {
                     exitPrice.toPlainString(),
                     profit.toPlainString(),
                     LocalDateTime.now().format(formatter)
-                )
+                ),
+                true  // ✅ 启用@提醒
             );
             
             // ✨ 使用重试机制发送
@@ -278,33 +288,60 @@ public class FeishuNotificationService {
     }
     
     /**
-     * 构建卡片消息
+     * 构建卡片消息（支持@提醒）
+     * 
+     * @param title 标题
+     * @param color 颜色
+     * @param content 内容
+     * @param needMention 是否需要@提醒
+     * @return JSON格式的消息
+     */
+    private String buildCardMessage(String title, String color, String content, boolean needMention) {
+        StringBuilder jsonBuilder = new StringBuilder();
+        jsonBuilder.append("{\n");
+        jsonBuilder.append("  \"msg_type\": \"interactive\",\n");
+        jsonBuilder.append("  \"card\": {\n");
+        jsonBuilder.append("    \"config\": {\n");
+        jsonBuilder.append("      \"wide_screen_mode\": true\n");
+        jsonBuilder.append("    },\n");
+        jsonBuilder.append("    \"header\": {\n");
+        jsonBuilder.append("      \"title\": {\n");
+        jsonBuilder.append("        \"tag\": \"plain_text\",\n");
+        jsonBuilder.append(String.format("        \"content\": \"%s\"\n", title));
+        jsonBuilder.append("      },\n");
+        jsonBuilder.append(String.format("      \"template\": \"%s\"\n", color));
+        jsonBuilder.append("    },\n");
+        jsonBuilder.append("    \"elements\": [\n");
+        
+        // 如果需要@提醒且配置了用户ID，添加@组件
+        if (needMention && mentionEnabled && mentionUserId != null && !mentionUserId.isEmpty()) {
+            jsonBuilder.append("      {\n");
+            jsonBuilder.append("        \"tag\": \"div\",\n");
+            jsonBuilder.append("        \"text\": {\n");
+            jsonBuilder.append("          \"tag\": \"lark_md\",\n");
+            jsonBuilder.append(String.format("          \"content\": \"<at id=%s></at>\"\n", mentionUserId));
+            jsonBuilder.append("        }\n");
+            jsonBuilder.append("      },\n");
+            log.debug("添加@提醒: userId={}", mentionUserId);
+        }
+        
+        // 添加消息内容
+        jsonBuilder.append("      {\n");
+        jsonBuilder.append("        \"tag\": \"markdown\",\n");
+        jsonBuilder.append(String.format("        \"content\": \"%s\"\n", content.replace("\n", "\\n")));
+        jsonBuilder.append("      }\n");
+        jsonBuilder.append("    ]\n");
+        jsonBuilder.append("  }\n");
+        jsonBuilder.append("}");
+        
+        return jsonBuilder.toString();
+    }
+    
+    /**
+     * 构建卡片消息（不带@提醒）
      */
     private String buildCardMessage(String title, String color, String content) {
-        // 飞书卡片消息格式
-        return String.format("""
-            {
-              "msg_type": "interactive",
-              "card": {
-                "config": {
-                  "wide_screen_mode": true
-                },
-                "header": {
-                  "title": {
-                    "tag": "plain_text",
-                    "content": "%s"
-                  },
-                  "template": "%s"
-                },
-                "elements": [
-                  {
-                    "tag": "markdown",
-                    "content": "%s"
-                  }
-                ]
-              }
-            }
-            """, title, color, content.replace("\n", "\\n"));
+        return buildCardMessage(title, color, content, false);
     }
     
     /**
