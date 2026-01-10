@@ -36,6 +36,9 @@ public class PaperTradingService {
     @Autowired
     private FeishuNotificationService feishuNotificationService;
     
+    @Autowired(required = false)
+    private MLRecordService mlRecordService;
+    
     // ✨ 移动止损配置参数
     @Value("${trading.risk.trailing-stop.enabled:true}")
     private boolean trailingStopEnabled;
@@ -315,6 +318,9 @@ public class PaperTradingService {
         
         // 保存平仓记录到数据库
         saveCloseOrder(position, reason, exitPrice, realizedPnL);
+        
+        // ✨ 更新ML预测结果
+        updateMLPredictionResult(position.getPositionId(), reason, realizedPnL);
         
         // 🔔 发送飞书平仓通知
         try {
@@ -764,6 +770,40 @@ public class PaperTradingService {
             
         } catch (Exception e) {
             log.error("同步移动止损状态到数据库失败", e);
+        }
+    }
+    
+    /**
+     * ✨ 新增：更新ML预测结果
+     * 
+     * 在平仓时更新ML预测记录的实际结果
+     * 
+     * @param orderNo 订单号（positionId）
+     * @param closeReason 平仓原因（STOP_LOSS/TAKE_PROFIT/SIGNAL_REVERSAL）
+     * @param profitLoss 实际盈亏
+     */
+    private void updateMLPredictionResult(String orderNo, String closeReason, BigDecimal profitLoss) {
+        if (mlRecordService == null) {
+            return;
+        }
+        
+        try {
+            String actualResult;
+            if (profitLoss.compareTo(BigDecimal.ZERO) > 0) {
+                actualResult = "PROFIT";
+            } else if (profitLoss.compareTo(BigDecimal.ZERO) < 0) {
+                actualResult = "LOSS";
+            } else {
+                actualResult = "BREAK_EVEN";
+            }
+            
+            mlRecordService.updatePredictionResult(orderNo, actualResult, profitLoss);
+            
+            log.debug("✅ ML预测结果已更新: 订单={}, 结果={}, 盈亏=${}", 
+                     orderNo, actualResult, profitLoss);
+            
+        } catch (Exception e) {
+            log.warn("⚠️ 更新ML预测结果失败: 订单={}", orderNo, e);
         }
     }
 }

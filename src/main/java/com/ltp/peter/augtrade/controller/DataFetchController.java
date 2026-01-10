@@ -98,8 +98,8 @@ public class DataFetchController {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime monthAgo = now.minusDays(30);
         
-        String startDate = "2025-01-01";
-        String endDate = "2025-05-31";
+        String startDate = "2024-01-01";
+        String endDate = "2024-12-31";
         
         return fetchHistoricalData("XAUUSD", "5", startDate, endDate);
     }

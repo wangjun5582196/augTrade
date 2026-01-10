@@ -1,6 +1,7 @@
 package com.ltp.peter.augtrade.service.core.strategy;
 
 import com.ltp.peter.augtrade.service.MLPredictionService;
+import com.ltp.peter.augtrade.service.MLRecordService;
 import com.ltp.peter.augtrade.service.core.indicator.ADXCalculator;
 import com.ltp.peter.augtrade.service.core.indicator.CandlePattern;
 import com.ltp.peter.augtrade.service.core.indicator.CandlePatternAnalyzer;
@@ -55,6 +56,9 @@ public class BalancedAggressiveStrategy implements Strategy {
     @Autowired(required = false)
     private MLPredictionService mlPredictionService;
     
+    @Autowired(required = false)
+    private MLRecordService mlRecordService;
+    
     @Autowired
     private MarketRegimeDetector marketRegimeDetector;
     
@@ -79,9 +83,11 @@ public class BalancedAggressiveStrategy implements Strategy {
             
             // ML预测（可选）
             double mlPrediction = 0.5;
+            double mlConfidence = 0.5;
             if (mlPredictionService != null) {
                 try {
                     mlPrediction = mlPredictionService.predictMarketDirection(context.getKlines());
+                    mlConfidence = mlPredictionService.getConfidence(context.getKlines());
                 } catch (Exception e) {
                     log.warn("[{}] ML预测失败，使用默认值0.5", STRATEGY_NAME);
                 }
@@ -184,6 +190,10 @@ public class BalancedAggressiveStrategy implements Strategy {
                         String.format("均衡激进策略做多 (评分:%d, Williams:%.1f, RSI:%.1f)", 
                                 buyScore, williamsR, rsi);
                 
+                // ✨ 记录ML预测（买入信号）
+                recordMLPrediction(context.getSymbol(), mlPrediction, "BUY", mlConfidence, 
+                                   williamsR, context.getCurrentPrice(), true);
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(strength)
@@ -203,6 +213,10 @@ public class BalancedAggressiveStrategy implements Strategy {
                         String.format("均衡激进策略做空 (评分:%d, Williams:%.1f, RSI:%.1f)", 
                                 sellScore, williamsR, rsi);
                 
+                // ✨ 记录ML预测（卖出信号）
+                recordMLPrediction(context.getSymbol(), mlPrediction, "SELL", mlConfidence, 
+                                   williamsR, context.getCurrentPrice(), true);
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(strength)
@@ -214,7 +228,7 @@ public class BalancedAggressiveStrategy implements Strategy {
                         .build();
             }
             
-            // 评分不足或冲突
+            // 评分不足或冲突 - 不记录ML（只有开仓时才记录）
             String reason = String.format("评分不足或冲突 (买入:%d, 卖出:%d, 需要:%d)", 
                     buyScore, sellScore, requiredScore);
             return createHoldSignal(reason, buyScore, sellScore);
@@ -271,5 +285,32 @@ public class BalancedAggressiveStrategy implements Strategy {
                 .strategyName(STRATEGY_NAME)
                 .reason(reason)
                 .build();
+    }
+    
+    /**
+     * ✨ 新增：记录ML预测到数据库
+     */
+    private void recordMLPrediction(String symbol, double mlPrediction, String predictedSignal,
+                                    double confidence, double williamsR, BigDecimal currentPrice,
+                                    boolean tradeTaken) {
+        if (mlRecordService != null) {
+            try {
+                mlRecordService.recordPrediction(
+                    symbol,
+                    BigDecimal.valueOf(mlPrediction),
+                    predictedSignal,
+                    BigDecimal.valueOf(confidence),
+                    BigDecimal.valueOf(williamsR),
+                    currentPrice,
+                    tradeTaken,
+                    null  // orderNo在开仓时才有，这里先传null
+                );
+                log.debug("[{}] ✅ ML预测已记录: 信号={}, 预测值={}, 置信度={}, 是否交易={}", 
+                         STRATEGY_NAME, predictedSignal, String.format("%.2f", mlPrediction), 
+                         String.format("%.2f", confidence), tradeTaken);
+            } catch (Exception e) {
+                log.warn("[{}] ⚠️ ML预测记录失败", STRATEGY_NAME, e);
+            }
+        }
     }
 }
