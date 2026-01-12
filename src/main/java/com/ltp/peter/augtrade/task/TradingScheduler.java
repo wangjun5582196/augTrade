@@ -125,10 +125,10 @@ public class TradingScheduler {
     private static final int MIN_HOLDING_SECONDS_BIG_PROFIT = 1200; // 大盈利时20分钟（从15分钟增加）
     
     /**
-     * Bybit数据采集任务 - 每60秒执行一次
+     * Bybit数据采集任务 - 每300秒（5分钟）执行一次
      * 仅在Bybit启用时采集黄金K线数据
      */
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRate = 300000)
     public void collectMarketData() {
         // 如果启用Bybit，采集Bybit黄金数据
         if (bybitEnabled && bybitTradingService.isEnabled()) {
