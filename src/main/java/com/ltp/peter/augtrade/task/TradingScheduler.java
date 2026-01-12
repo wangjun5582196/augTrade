@@ -126,6 +126,7 @@ public class TradingScheduler {
     
     /**
      * Bybit数据采集任务 - 每300秒（5分钟）执行一次
+     * 注意：采集频率应与K线周期匹配，避免重复数据
      * 仅在Bybit启用时采集黄金K线数据
      */
     @Scheduled(fixedRate = 300000)
@@ -334,19 +335,19 @@ public class TradingScheduler {
                 }
             }
             
-            // 5. 根据信号执行交易（✨ 优化：增加开仓信号强度要求）
+            // 5. 根据信号执行交易（✨ 修复：降低开仓阈值至60）
             if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY) {
-                // ✨ 开仓需要更高的信号强度（≥70）
-                if (tradingSignal.getStrength() < 70) {
-                    log.info("⏸️ 做多信号强度{}不足（需要≥70），暂不开仓", tradingSignal.getStrength());
+                // ✨ 开仓信号强度要求（≥60，从70降低）
+                if (tradingSignal.getStrength() < 60) {
+                    log.info("⏸️ 做多信号强度{}不足（需要≥60），暂不开仓", tradingSignal.getStrength());
                 } else {
                     log.info("🔥 收到高质量做多信号（强度{}）！准备做多黄金", tradingSignal.getStrength());
                     executeBybitBuy(currentPrice);
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
-                // ✨ 开仓需要更高的信号强度（≥70）
-                if (tradingSignal.getStrength() < 70) {
-                    log.info("⏸️ 做空信号强度{}不足（需要≥70），暂不开仓", tradingSignal.getStrength());
+                // ✨ 开仓信号强度要求（≥60，从70降低）
+                if (tradingSignal.getStrength() < 60) {
+                    log.info("⏸️ 做空信号强度{}不足（需要≥60），暂不开仓", tradingSignal.getStrength());
                 } else {
                     log.info("📉 收到高质量做空信号（强度{}）！准备做空黄金", tradingSignal.getStrength());
                     executeBybitSell(currentPrice);

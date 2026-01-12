@@ -56,6 +56,9 @@ public class StrategyOrchestrator {
     @Autowired
     private CandlePatternAnalyzer candlePatternAnalyzer;
     
+    @Autowired
+    private EMACalculator emaCalculator;
+    
     /**
      * 生成交易信号（主入口）
      * 
@@ -222,6 +225,13 @@ public class StrategyOrchestrator {
                 context.addIndicator("CandlePattern", pattern);
                 log.info("[StrategyOrchestrator] K线形态: {} ({})", 
                         pattern.getType().getDescription(), pattern.getDirection().getDescription());
+            }
+            
+            // EMA Trend (EMA20/EMA50)
+            EMACalculator.EMATrend emaTrend = emaCalculator.calculateTrend(klines, 20, 50);
+            if (emaTrend != null) {
+                context.addIndicator("EMATrend", emaTrend);
+                log.info("[StrategyOrchestrator] EMA趋势: {}", emaTrend.getTrendDescription());
             }
             
             log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标", context.getIndicators().size());

@@ -160,13 +160,15 @@ public class CompositeStrategy implements Strategy {
     /**
      * 计算信号强度
      * 基于主导得分和得分差距
+     * 
+     * ✨ 优化：提高倍数（×2→×3）和上限（70→80），确保TrendFilter单独信号也能达到开仓阈值
      */
     private int calculateSignalStrength(int dominantScore, int oppositeScore) {
         // 得分差距
         int scoreDiff = dominantScore - oppositeScore;
         
-        // 基础强度（根据主导得分）
-        int baseStrength = Math.min(dominantScore * 2, 70);
+        // 基础强度（根据主导得分）- 提高倍数和上限
+        int baseStrength = Math.min(dominantScore * 3, 80);  // 从×2改为×3，从70改为80
         
         // 额外强度（根据得分差距）
         int bonusStrength = Math.min(scoreDiff, 30);

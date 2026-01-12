@@ -50,10 +50,20 @@ public class WilliamsStrategy implements Strategy {
                 return createHoldSignal("指标计算失败");
             }
             
+            // 获取EMA趋势信息（用于过滤逆势信号）
+            com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend emaTrend = 
+                    context.getIndicator("EMATrend", com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend.class);
+            
             log.debug("[{}] Williams %R = {}", STRATEGY_NAME, williamsR);
             
             // 强烈超卖区域（< -80）
             if (williamsR < STRONG_OVERSOLD) {
+                // ✨ 趋势过滤：下跌趋势中不做多
+                if (emaTrend != null && emaTrend.isDownTrend()) {
+                    log.debug("[{}] Williams强烈超卖但处于下跌趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    return createHoldSignal(String.format("Williams强烈超卖但下跌趋势 (%.2f)", williamsR));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(90)
@@ -66,6 +76,12 @@ public class WilliamsStrategy implements Strategy {
             
             // 超卖区域（< -60）
             if (williamsR < OVERSOLD) {
+                // ✨ 趋势过滤：下跌趋势中不做多
+                if (emaTrend != null && emaTrend.isDownTrend()) {
+                    log.debug("[{}] Williams超卖但处于下跌趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    return createHoldSignal(String.format("Williams超卖但下跌趋势 (%.2f)", williamsR));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(70)
@@ -78,6 +94,12 @@ public class WilliamsStrategy implements Strategy {
             
             // 强烈超买区域（> -20）
             if (williamsR > STRONG_OVERBOUGHT) {
+                // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
+                if (emaTrend != null && emaTrend.isUpTrend()) {
+                    log.debug("[{}] Williams强烈超买但处于上涨趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    return createHoldSignal(String.format("Williams强烈超买但上涨趋势 (%.2f)", williamsR));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(90)
@@ -90,6 +112,12 @@ public class WilliamsStrategy implements Strategy {
             
             // 超买区域（> -40）
             if (williamsR > OVERBOUGHT) {
+                // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
+                if (emaTrend != null && emaTrend.isUpTrend()) {
+                    log.debug("[{}] Williams超买但处于上涨趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    return createHoldSignal(String.format("Williams超买但上涨趋势 (%.2f)", williamsR));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(70)

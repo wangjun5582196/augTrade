@@ -55,10 +55,20 @@ public class RSIStrategy implements Strategy {
                 return createHoldSignal("指标计算失败");
             }
             
+            // 获取EMA趋势信息（用于过滤逆势信号）
+            com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend emaTrend = 
+                    context.getIndicator("EMATrend", com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend.class);
+            
             log.debug("[{}] RSI = {}", STRATEGY_NAME, rsi);
             
             // 极度超卖区域（< 20）
             if (rsi < EXTREME_OVERSOLD) {
+                // ✨ 趋势过滤：下跌趋势中不做多
+                if (emaTrend != null && emaTrend.isDownTrend()) {
+                    log.debug("[{}] RSI极度超卖但处于下跌趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    return createHoldSignal(String.format("RSI极度超卖但下跌趋势 (%.2f)", rsi));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(95)
@@ -71,6 +81,12 @@ public class RSIStrategy implements Strategy {
             
             // 超卖区域（< 30）
             if (rsi < OVERSOLD) {
+                // ✨ 趋势过滤：下跌趋势中不做多
+                if (emaTrend != null && emaTrend.isDownTrend()) {
+                    log.debug("[{}] RSI超卖但处于下跌趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    return createHoldSignal(String.format("RSI超卖但下跌趋势 (%.2f)", rsi));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(75)
@@ -83,6 +99,12 @@ public class RSIStrategy implements Strategy {
             
             // 极度超买区域（> 80）
             if (rsi > EXTREME_OVERBOUGHT) {
+                // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
+                if (emaTrend != null && emaTrend.isUpTrend()) {
+                    log.debug("[{}] RSI极度超买但处于上涨趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    return createHoldSignal(String.format("RSI极度超买但上涨趋势 (%.2f)", rsi));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(95)
@@ -95,6 +117,12 @@ public class RSIStrategy implements Strategy {
             
             // 超买区域（> 70）
             if (rsi > OVERBOUGHT) {
+                // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
+                if (emaTrend != null && emaTrend.isUpTrend()) {
+                    log.debug("[{}] RSI超买但处于上涨趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    return createHoldSignal(String.format("RSI超买但上涨趋势 (%.2f)", rsi));
+                }
+                
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(75)
