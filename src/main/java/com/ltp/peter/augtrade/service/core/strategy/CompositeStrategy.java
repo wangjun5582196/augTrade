@@ -30,7 +30,7 @@ public class CompositeStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "Composite";
     private static final int STRATEGY_WEIGHT = 10;
-    private static final int SIGNAL_THRESHOLD = 15; // 最小信号阈值
+    private static final int SIGNAL_THRESHOLD = 6; // 🔥 降低阈值：从15→6，允许单个策略（如BollingerBreakout权重6）触发信号
     
     @Autowired(required = false)
     private List<Strategy> strategies;

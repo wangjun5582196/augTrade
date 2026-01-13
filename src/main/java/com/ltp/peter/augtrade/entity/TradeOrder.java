@@ -95,6 +95,85 @@ public class TradeOrder {
      */
     private String remark;
     
+    // ==================== 🔥 新增：技术指标字段(用于AI学习) ====================
+    
+    /**
+     * Williams %R指标值
+     */
+    private BigDecimal williamsR;
+    
+    /**
+     * ADX趋势强度指标值
+     */
+    private BigDecimal adx;
+    
+    /**
+     * EMA20均线值
+     */
+    private BigDecimal ema20;
+    
+    /**
+     * EMA50均线值
+     */
+    private BigDecimal ema50;
+    
+    /**
+     * ATR波动率指标值
+     */
+    private BigDecimal atr;
+    
+    /**
+     * K线形态类型
+     */
+    private String candlePattern;
+    
+    /**
+     * K线形态强度(0-10)
+     */
+    private Integer candlePatternStrength;
+    
+    /**
+     * 布林带上轨
+     */
+    private Double bollingerUpper;
+    
+    /**
+     * 布林带中轨
+     */
+    private Double bollingerMiddle;
+    
+    /**
+     * 布林带下轨
+     */
+    private Double bollingerLower;
+    
+    /**
+     * 信号强度(0-100)
+     */
+    private Integer signalStrength;
+    
+    /**
+     * 信号得分
+     */
+    private Integer signalScore;
+    
+    /**
+     * 市场状态: STRONG_TREND/WEAK_TREND/RANGING/CHOPPY
+     */
+    private String marketRegime;
+    
+    /**
+     * ML预测值(0-1)
+     */
+    private BigDecimal mlPrediction;
+    
+    /**
+     * ML置信度(0-1)
+     */
+    private BigDecimal mlConfidence;
+    
+    // ==================== 原有字段 ====================
+    
     /**
      * 创建时间
      */

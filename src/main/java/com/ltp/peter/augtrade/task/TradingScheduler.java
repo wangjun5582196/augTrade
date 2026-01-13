@@ -63,6 +63,9 @@ public class TradingScheduler {
     @Autowired
     private FeishuNotificationService feishuNotificationService;
     
+    @Autowired
+    private IndicatorService indicatorService;
+    
     @Value("${trading.gold.symbol:XAUUSD}")
     private String symbol;
     
@@ -173,10 +176,10 @@ public class TradingScheduler {
     }
     
     /**
-     * 策略执行任务 - 每10秒执行一次
+     * 策略执行任务 - 🔥 P0修复：每60秒执行一次（从10秒延长，减少噪音交易）
      * 使用Bybit交易黄金（XAUUSDT）
      */
-    @Scheduled(fixedRate = 10000)
+    @Scheduled(fixedRate = 60000)
     public void executeStrategy() {
         if (!strategyEnabled) {
             return;
@@ -276,27 +279,48 @@ public class TradingScheduler {
                     return;
                 }
                 
-                // 持有多头，出现做空信号 → 平仓（增强版：盈利保护 + 信号强度检查）
+                // 🔥 P0修复：持有多头，出现做空信号 → 平仓（严格限制条件）
                 if (currentPosition.getSide().equals("LONG") && 
                     tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
                     
-                    // ✨ 盈利保护：盈利时不反转平仓
-                    if (unrealizedPnL.compareTo(BigDecimal.ZERO) >= 0) {
-                        log.info("💰 持仓盈利${}，忽略反转信号，让利润奔跑", unrealizedPnL);
+                    // 🔥 规则1：盈利>$50时，禁止信号反转，只能止盈或移动止损
+                    if (unrealizedPnL.compareTo(new BigDecimal("50")) > 0) {
+                        log.info("💰 持仓盈利${}超过$50，禁止信号反转，等待止盈或移动止损", unrealizedPnL);
                         log.info("========================================");
                         return;
                     }
                     
-                    // ✨ 信号强度检查：只在强信号时反转（提高阈值避免频繁反转）
-                    if (tradingSignal.getStrength() < 85) {
-                        log.info("⚠️ 反转信号强度{}不足（需要≥85），持仓亏损${}但不平仓", 
+                    // 🔥 规则2：小幅盈亏(±$20)时，禁止信号反转，给予更多空间
+                    if (unrealizedPnL.abs().compareTo(new BigDecimal("20")) < 0) {
+                        log.info("⚠️ 盈亏${}在±$20内，禁止信号反转，给予更多空间", unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 🔥 规则3：移动止损启动后，禁止信号反转
+                    if (currentPosition.getTrailingStopEnabled() != null && currentPosition.getTrailingStopEnabled()) {
+                        log.info("🔒 移动止损已启动，禁止信号反转，保护利润${}",unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 🔥 规则4：只在超强信号(≥90)且亏损>$30时才反转
+                    if (tradingSignal.getStrength() < 90) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥90），持仓盈亏${}但不平仓", 
                                 tradingSignal.getStrength(), unrealizedPnL);
                         log.info("========================================");
                         return;
                     }
                     
-                    // 只有亏损且强信号才反转
-                    log.warn("⚠️ 信号反转！持有多头但出现强做空信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
+                    if (unrealizedPnL.compareTo(new BigDecimal("-30")) > 0) {
+                        log.info("⚠️ 亏损${}未达到$30，即使信号强度{}也不反转", 
+                                unrealizedPnL, tradingSignal.getStrength());
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 满足所有严格条件才反转：亏损>$30 且 信号强度≥90
+                    log.warn("🚨 满足反转条件！持有多头，强做空信号（强度{}），亏损${}，持仓{}秒后平仓", 
                              tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
                     lastCloseTime = LocalDateTime.now();
@@ -305,27 +329,48 @@ public class TradingScheduler {
                     return;
                 }
                 
-                // 持有空头，出现做多信号 → 平仓（增强版：盈利保护 + 信号强度检查）
+                // 🔥 P0修复：持有空头，出现做多信号 → 平仓（严格限制条件）
                 if (currentPosition.getSide().equals("SHORT") && 
                     tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY) {
                     
-                    // ✨ 盈利保护：盈利时不反转平仓
-                    if (unrealizedPnL.compareTo(BigDecimal.ZERO) >= 0) {
-                        log.info("💰 持仓盈利${}，忽略反转信号，让利润奔跑", unrealizedPnL);
+                    // 🔥 规则1：盈利>$50时，禁止信号反转
+                    if (unrealizedPnL.compareTo(new BigDecimal("50")) > 0) {
+                        log.info("💰 持仓盈利${}超过$50，禁止信号反转，等待止盈或移动止损", unrealizedPnL);
                         log.info("========================================");
                         return;
                     }
                     
-                    // ✨ 信号强度检查：只在强信号时反转（提高阈值避免频繁反转）
-                    if (tradingSignal.getStrength() < 85) {
-                        log.info("⚠️ 反转信号强度{}不足（需要≥85），持仓亏损${}但不平仓", 
+                    // 🔥 规则2：小幅盈亏(±$20)时，禁止信号反转
+                    if (unrealizedPnL.abs().compareTo(new BigDecimal("20")) < 0) {
+                        log.info("⚠️ 盈亏${}在±$20内，禁止信号反转，给予更多空间", unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 🔥 规则3：移动止损启动后，禁止信号反转
+                    if (currentPosition.getTrailingStopEnabled() != null && currentPosition.getTrailingStopEnabled()) {
+                        log.info("🔒 移动止损已启动，禁止信号反转，保护利润${}",unrealizedPnL);
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 🔥 规则4：只在超强信号(≥90)且亏损>$30时才反转
+                    if (tradingSignal.getStrength() < 90) {
+                        log.info("⚠️ 反转信号强度{}不足（需要≥90），持仓盈亏${}但不平仓", 
                                 tradingSignal.getStrength(), unrealizedPnL);
                         log.info("========================================");
                         return;
                     }
                     
-                    // 只有亏损且强信号才反转
-                    log.warn("⚠️ 信号反转！持有空头但出现强做多信号（强度{}），持仓亏损${}，持仓{}秒后平仓", 
+                    if (unrealizedPnL.compareTo(new BigDecimal("-30")) > 0) {
+                        log.info("⚠️ 亏损${}未达到$30，即使信号强度{}也不反转", 
+                                unrealizedPnL, tradingSignal.getStrength());
+                        log.info("========================================");
+                        return;
+                    }
+                    
+                    // 满足所有严格条件才反转：亏损>$30 且 信号强度≥90
+                    log.warn("🚨 满足反转条件！持有空头，强做多信号（强度{}），亏损${}，持仓{}秒后平仓", 
                              tradingSignal.getStrength(), unrealizedPnL, holdingSeconds);
                     paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
                     lastCloseTime = LocalDateTime.now();
@@ -335,25 +380,35 @@ public class TradingScheduler {
                 }
             }
             
-            // 5. 根据信号执行交易（✨ 修复：降低开仓阈值至60）
+            // 🔥 P0修复：添加震荡市识别
+            MarketRegime regime = detectMarketRegime(bybitSymbol);
+            int requiredStrength = calculateRequiredStrength(regime, tradingSignal);
+            
+            // 5. 根据信号执行交易（动态调整开仓门槛）
             if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY) {
-                // ✨ 开仓信号强度要求（≥60，从70降低）
-                if (tradingSignal.getStrength() < 60) {
-                    log.info("⏸️ 做多信号强度{}不足（需要≥60），暂不开仓", tradingSignal.getStrength());
+                if (tradingSignal.getStrength() < requiredStrength) {
+                    log.info("⏸️ 做多信号强度{}不足（市场状态：{}，需要≥{}），暂不开仓", 
+                            tradingSignal.getStrength(), regime, requiredStrength);
                 } else {
-                    log.info("🔥 收到高质量做多信号（强度{}）！准备做多黄金", tradingSignal.getStrength());
+                    log.info("🔥 收到高质量做多信号（强度{}，市场：{}）！准备做多黄金", 
+                            tradingSignal.getStrength(), regime);
                     executeBybitBuy(currentPrice);
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
-                // ✨ 开仓信号强度要求（≥60，从70降低）
-                if (tradingSignal.getStrength() < 60) {
-                    log.info("⏸️ 做空信号强度{}不足（需要≥60），暂不开仓", tradingSignal.getStrength());
+                // 🔥 P0修复：提高做空门槛（而非完全禁用）
+                int shortRequiredStrength = requiredStrength + 15; // 做空需要更高强度
+                
+                if (tradingSignal.getStrength() < shortRequiredStrength) {
+                    log.info("🚫 做空信号强度{}不足（市场：{}，做空需要≥{}），暂不开空仓", 
+                            tradingSignal.getStrength(), regime, shortRequiredStrength);
+                    log.info("💡 提示：做空策略已提高门槛（回测做空胜率仅21.4%，需要超强信号）");
                 } else {
-                    log.info("📉 收到高质量做空信号（强度{}）！准备做空黄金", tradingSignal.getStrength());
+                    log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
+                            tradingSignal.getStrength(), shortRequiredStrength, regime);
                     executeBybitSell(currentPrice);
                 }
             } else {
-                log.debug("⏸️ 保持观望，等待高质量信号");
+                log.debug("⏸️ 保持观望，等待高质量信号（市场状态：{}）", regime);
             }
             
             log.info("策略执行完成");
@@ -408,6 +463,12 @@ public class TradingScheduler {
             
             if (paperTrading) {
                 // 🎯 模拟交易模式 - 开仓并持有
+                // 🔥 获取市场上下文用于保存指标
+                com.ltp.peter.augtrade.service.core.strategy.MarketContext context = 
+                        strategyOrchestrator.getMarketContext(bybitSymbol, 100);
+                com.ltp.peter.augtrade.service.core.signal.TradingSignal signal = 
+                        strategyOrchestrator.generateSignal(bybitSymbol);
+                
                 paperTradingService.openPosition(
                         bybitSymbol,
                         "LONG",
@@ -415,7 +476,9 @@ public class TradingScheduler {
                         new BigDecimal(bybitMinQty),
                         stopLoss,
                         takeProfit,
-                        "AggressiveML"
+                        "AggressiveML",
+                        signal,    // 🔥 传递信号
+                        context    // 🔥 传递上下文
                 );
                 
             } else {
@@ -481,6 +544,12 @@ public class TradingScheduler {
             
             if (paperTrading) {
                 // 🎯 模拟交易模式 - 开仓并持有
+                // 🔥 获取市场上下文用于保存指标
+                com.ltp.peter.augtrade.service.core.strategy.MarketContext context = 
+                        strategyOrchestrator.getMarketContext(bybitSymbol, 100);
+                com.ltp.peter.augtrade.service.core.signal.TradingSignal signal = 
+                        strategyOrchestrator.generateSignal(bybitSymbol);
+                
                 paperTradingService.openPosition(
                         bybitSymbol,
                         "SHORT",
@@ -488,7 +557,9 @@ public class TradingScheduler {
                         new BigDecimal(bybitMinQty),
                         stopLoss,
                         takeProfit,
-                        "AggressiveML"
+                        "AggressiveML",
+                        signal,    // 🔥 传递信号
+                        context    // 🔥 传递上下文
                 );
                 
             } else {
@@ -945,5 +1016,84 @@ public class TradingScheduler {
             // 默认1分钟冷却
             return 60;
         }
+    }
+    
+    /**
+     * 🔥 P0修复：市场状态枚举
+     */
+    public enum MarketRegime {
+        STRONG_TREND,    // 强趋势 (ADX > 30)
+        WEAK_TREND,      // 弱趋势 (ADX 20-30)
+        RANGING          // 震荡市 (ADX < 20)
+    }
+    
+    /**
+     * 🔥 P0修复：检测市场状态
+     * 使用ADX指标识别趋势市和震荡市
+     */
+    private MarketRegime detectMarketRegime(String symbol) {
+        try {
+            // 获取最近的K线数据
+            java.util.List<Kline> klines = marketDataService.getLatestKlines(symbol, "5m", 50);
+            
+            if (klines == null || klines.size() < 15) {
+                log.warn("⚠️ K线数据不足，默认为弱趋势");
+                return MarketRegime.WEAK_TREND;
+            }
+            
+            // 计算ADX
+            BigDecimal adx = indicatorService.calculateADX(klines, 14);
+            
+            if (adx == null) {
+                log.warn("⚠️ ADX计算失败，默认为弱趋势");
+                return MarketRegime.WEAK_TREND;
+            }
+            
+            double adxValue = adx.doubleValue();
+            
+            if (adxValue > 30) {
+                log.info("📊 市场状态: 强趋势 (ADX={:.1f} > 30)", adxValue);
+                return MarketRegime.STRONG_TREND;
+            } else if (adxValue >= 20) {
+                log.info("📊 市场状态: 弱趋势 (ADX={:.1f}, 20-30)", adxValue);
+                return MarketRegime.WEAK_TREND;
+            } else {
+                log.warn("📊 市场状态: 震荡市 (ADX={:.1f} < 20) ⚠️ EMA信号不可靠", adxValue);
+                return MarketRegime.RANGING;
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ 检测市场状态失败", e);
+            return MarketRegime.WEAK_TREND;
+        }
+    }
+    
+    /**
+     * 🔥 修复：根据市场状态和信号类型计算所需信号强度
+     * 降低门槛让策略能够正常开仓
+     */
+    private int calculateRequiredStrength(MarketRegime regime, 
+                                         com.ltp.peter.augtrade.service.core.signal.TradingSignal signal) {
+        int baseStrength;
+        
+        switch (regime) {
+            case STRONG_TREND:
+                // 强趋势市，最低门槛（从60→20），鼓励趋势跟随
+                baseStrength = 20;
+                break;
+            case WEAK_TREND:
+                // 弱趋势市，中等门槛（从70→30）
+                baseStrength = 30;
+                break;
+            case RANGING:
+                // 震荡市，较高门槛（从85→50），但不要过高避免错过机会
+                baseStrength = 50;
+                log.warn("⚠️ 震荡市检测！提高开仓门槛至{}，避免虚假信号", baseStrength);
+                break;
+            default:
+                baseStrength = 30;
+        }
+        
+        return baseStrength;
     }
 }

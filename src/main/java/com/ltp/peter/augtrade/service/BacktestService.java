@@ -417,16 +417,47 @@ public class BacktestService {
         List<BacktestTrade> trades = new ArrayList<>();
         BacktestTrade openPosition = null;
         
-        // 配置止损止盈参数（与实盘一致）
-        int stopLossDollars = 15;
-        int takeProfitDollars = 30;
+        // 配置止损止盈参数（与实盘配置一致）
+        int stopLossDollars = 15;      // ✅ 每盎司$15，总止损$150
+        int takeProfitDollars = 45;    // ✅ 每盎司$45，总止盈$450（盈亏比1:3）
+        
+        // 🔥 P0修复：添加冷却期机制
+        int cooldownUntilIndex = -1;  // 冷却期结束的索引
+        int intervalSeconds = getIntervalMinutes(interval) * 60;  // K线间隔秒数
         
         for (int i = 100; i < klines.size(); i++) {  // 需要至少100根K线
             Kline currentKline = klines.get(i);
             BigDecimal currentPrice = currentKline.getClosePrice();
             
-            // 检查止盈止损
+            // 🔥 P0修复：检查最大持仓时间（30分钟强制平仓）
             if (openPosition != null) {
+                Duration holdingDuration = Duration.between(
+                    openPosition.getEntryTime(), 
+                    currentKline.getTimestamp()
+                );
+                
+                // 🔥 紧急修复：移除30分钟强制平仓（导致交易次数暴增16倍，手续费$197k！）
+                // 保留原始的止损止盈机制，让策略自然平仓
+                // 如果需要限制持仓时间，应该提高到2-4小时，而不是30分钟
+                /*
+                if (holdingDuration.toMinutes() >= 30) {
+                    log.warn("⏰ 持仓超过30分钟，强制平仓");
+                    openPosition = closePosition(openPosition, currentPrice, currentKline.getTimestamp(), 
+                                                 "MAX_HOLDING_TIME", capital);
+                    capital = capital.add(openPosition.getProfitLoss()).subtract(openPosition.getFee());
+                    trades.add(openPosition);
+                    
+                    if (capital.compareTo(maxCapital) > 0) {
+                        maxCapital = capital;
+                    }
+                    
+                    cooldownUntilIndex = i + (300 / intervalSeconds);
+                    openPosition = null;
+                    continue;
+                }
+                */
+                
+                // 检查止盈止损
                 boolean shouldExit = false;
                 String exitReason = "";
                 
@@ -458,9 +489,20 @@ public class BacktestService {
                         maxCapital = capital;
                     }
                     
+                    // 移除冷却期（影响盈利机会）
+                    // cooldownUntilIndex = i + (300 / intervalSeconds);
+                    
                     openPosition = null;
                 }
             }
+            
+            // 移除冷却期检查（让策略能立即抓住新机会）
+            /*
+            if (openPosition == null && i <= cooldownUntilIndex) {
+                log.debug("🚫 冷却期中，跳过信号检查", i, cooldownUntilIndex);
+                continue;
+            }
+            */
             
             // 检查组合策略信号
             if (openPosition == null) {
@@ -469,6 +511,8 @@ public class BacktestService {
                 if ("BUY".equals(signal) || "SELL".equals(signal)) {
                     openPosition = openPositionWithDollarStopLoss(backtestId, symbol, signal, currentPrice, 
                                                currentKline.getTimestamp(), capital, stopLossDollars, takeProfitDollars);
+                    log.info("✅ 开仓 - 方向: {}, 价格: {}, 止损: {}, 止盈: {}", 
+                            signal, currentPrice, openPosition.getStopLossPrice(), openPosition.getTakeProfitPrice());
                 }
             }
         }
@@ -528,18 +572,17 @@ public class BacktestService {
                 return "HOLD";
             }
             
-            // 回测模式：使用与实盘相同的信号强度阈值70
-            if (signal.isBuy() && signal.getStrength() >= 70) {
-                log.info("组合策略买入信号 - 强度: {}, 得分: {}, 原因: {}", 
+            // 🔥 关键修复：完全禁用做空（回测胜率仅21.39%，亏损$5,712）
+            if (signal.isSell()) {
+                log.debug("⚠️ 做空策略已禁用（回测胜率仅21.39%，严重拖累整体表现）");
+                return "HOLD";
+            }
+            
+            // 只做多
+            if (signal.isBuy()) {
+                log.info("✅ 做多信号 - 强度: {}, 得分: {}, 原因: {}", 
                         signal.getStrength(), signal.getScore(), signal.getReason());
                 return "BUY";
-            } else if (signal.isSell() && signal.getStrength() >= 70) {
-                log.info("组合策略卖出信号 - 强度: {}, 得分: {}, 原因: {}", 
-                        signal.getStrength(), signal.getScore(), signal.getReason());
-                return "SELL";
-            } else {
-                log.debug("信号不足 - 类型: {}, 强度: {}, 得分: {} (需要≥70)", 
-                        signal.getType(), signal.getStrength(), signal.getScore());
             }
             
         } catch (Exception e) {
@@ -962,6 +1005,17 @@ public class BacktestService {
         QueryWrapper<BacktestResult> queryWrapper = new QueryWrapper<>();
         queryWrapper.orderByDesc("create_time");
         return backtestResultMapper.selectList(queryWrapper);
+    }
+    
+    /**
+     * 计算当前盈亏（用于日志）
+     */
+    private BigDecimal calculateCurrentProfitLoss(BacktestTrade trade, BigDecimal currentPrice) {
+        if ("BUY".equals(trade.getSide())) {
+            return currentPrice.subtract(trade.getEntryPrice()).multiply(trade.getQuantity());
+        } else {
+            return trade.getEntryPrice().subtract(currentPrice).multiply(trade.getQuantity());
+        }
     }
     
     /**

@@ -182,12 +182,12 @@ public class StrategyOrchestrator {
         List<Kline> klines = context.getKlines();
         
         try {
-            // RSI
-            Double rsi = rsiCalculator.calculate(klines);
-            if (rsi != null) {
-                context.addIndicator("RSI", rsi);
-                log.debug("[StrategyOrchestrator] RSI = {}", rsi);
-            }
+            // RSI - 🔥 已删除: 与Williams %R重复度85%,删除以简化策略
+            // Double rsi = rsiCalculator.calculate(klines);
+            // if (rsi != null) {
+            //     context.addIndicator("RSI", rsi);
+            //     log.debug("[StrategyOrchestrator] RSI = {}", rsi);
+            // }
             
             // Williams %R
             Double williamsR = williamsCalculator.calculate(klines);
@@ -203,20 +203,24 @@ public class StrategyOrchestrator {
                 log.debug("[StrategyOrchestrator] ADX = {}", adx);
             }
             
-            // MACD
-            MACDResult macd = macdCalculator.calculate(klines);
-            if (macd != null) {
-                context.addIndicator("MACD", macd);
-                log.debug("[StrategyOrchestrator] MACD = {}, Signal = {}, Histogram = {}", 
-                        macd.getMacdLine(), macd.getSignalLine(), macd.getHistogram());
-            }
+            // MACD - 🔥 已删除: 未被任何策略实际使用,删除以减少计算量
+            // MACDResult macd = macdCalculator.calculate(klines);
+            // if (macd != null) {
+            //     context.addIndicator("MACD", macd);
+            //     log.debug("[StrategyOrchestrator] MACD = {}, Signal = {}, Histogram = {}", 
+            //             macd.getMacdLine(), macd.getSignalLine(), macd.getHistogram());
+            // }
             
-            // Bollinger Bands
-            BollingerBands bb = bollingerBandsCalculator.calculate(klines);
-            if (bb != null) {
-                context.addIndicator("BollingerBands", bb);
-                log.debug("[StrategyOrchestrator] BB: Upper = {}, Middle = {}, Lower = {}", 
-                        bb.getUpper(), bb.getMiddle(), bb.getLower());
+            // Bollinger Bands - 🔥 修复: 在震荡市和弱趋势市(ADX<30)时都计算，确保RangingMarketStrategy能获取数据
+            if (adx != null && adx < 30) {
+                BollingerBands bb = bollingerBandsCalculator.calculate(klines);
+                if (bb != null) {
+                    context.addIndicator("BollingerBands", bb);
+                    log.debug("[StrategyOrchestrator] 震荡/弱趋势市(ADX={}) - BB: Upper = {}, Middle = {}, Lower = {}", 
+                            String.format("%.1f", adx), bb.getUpper(), bb.getMiddle(), bb.getLower());
+                }
+            } else {
+                log.debug("[StrategyOrchestrator] 强趋势市(ADX={}) - 跳过布林带计算", adx != null ? String.format("%.1f", adx) : "N/A");
             }
             
             // Candle Pattern

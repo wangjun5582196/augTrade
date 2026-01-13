@@ -60,13 +60,13 @@ public class RangingMarketStrategy implements Strategy {
             
             log.info("[{}] ✅ {}市场，启用震荡市均值回归策略", STRATEGY_NAME, regime.getDescription());
             
-            // 2. 获取技术指标
+            // 2. 获取技术指标（只需要布林带和Williams %R，不需要RSI）
             BollingerBands bb = context.getIndicator("BollingerBands", BollingerBands.class);
-            Double rsi = context.getIndicatorAsDouble("RSI");
             Double williamsR = context.getIndicatorAsDouble("WilliamsR");
             
-            if (bb == null || rsi == null) {
-                log.warn("[{}] 指标数据不足", STRATEGY_NAME);
+            if (bb == null || williamsR == null) {
+                log.warn("[{}] 指标数据不足 - BB={}, WilliamsR={}", STRATEGY_NAME, 
+                        bb != null ? "有" : "无", williamsR != null ? "有" : "无");
                 return createHoldSignal("指标计算失败");
             }
             
@@ -85,8 +85,8 @@ public class RangingMarketStrategy implements Strategy {
             double pricePosition = (price - lowerBand) / bandRange;
             double pricePositionPercent = pricePosition * 100;
             
-            log.info("[{}] 价格位置: {:.1f}% (0%=下轨, 50%=中轨, 100%=上轨), RSI: {}, Williams: {}", 
-                    STRATEGY_NAME, pricePositionPercent, String.format("%.1f", rsi), 
+            log.info("[{}] 价格位置: {:.1f}% (0%=下轨, 50%=中轨, 100%=上轨), Williams: {}", 
+                    STRATEGY_NAME, pricePositionPercent, 
                     williamsR != null ? String.format("%.1f", williamsR) : "N/A");
             
             // 3. 震荡市做多信号：低买（价格触及下轨 + 超卖）
@@ -94,21 +94,15 @@ public class RangingMarketStrategy implements Strategy {
                 int buyScore = 0;
                 String buyReason = "";
                 
-                // RSI超卖（<35）
-                if (rsi < 35) {
-                    buyScore += 5;
-                    buyReason += "RSI超卖(" + String.format("%.1f", rsi) + "), ";
-                } else if (rsi < 40) {
-                    buyScore += 3;
-                    buyReason += "RSI偏低(" + String.format("%.1f", rsi) + "), ";
-                }
-                
-                // Williams %R超卖
-                if (williamsR != null && williamsR < -75) {
-                    buyScore += 4;
+                // Williams %R超卖（替代RSI）- 加重权重
+                if (williamsR < -80) {
+                    buyScore += 8;  // 极度超卖
+                    buyReason += "Williams极度超卖(" + String.format("%.1f", williamsR) + "), ";
+                } else if (williamsR < -70) {
+                    buyScore += 5;  // 超卖
                     buyReason += "Williams超卖(" + String.format("%.1f", williamsR) + "), ";
-                } else if (williamsR != null && williamsR < -65) {
-                    buyScore += 2;
+                } else if (williamsR < -60) {
+                    buyScore += 3;  // 偏低
                     buyReason += "Williams偏低(" + String.format("%.1f", williamsR) + "), ";
                 }
                 
@@ -124,8 +118,8 @@ public class RangingMarketStrategy implements Strategy {
                     buyReason += "价格偏低, ";
                 }
                 
-                // 震荡市需要较高确认度（≥8分）
-                if (buyScore >= 8) {
+                // 震荡市需要较高确认度（≥12分，提高阈值减少交易频率）
+                if (buyScore >= 12) {
                     int strength = Math.min(60 + buyScore * 3, 90);
                     log.info("[{}] 🚀 震荡市做多信号（得分{}）: {}", STRATEGY_NAME, buyScore, buyReason);
                     
@@ -148,21 +142,15 @@ public class RangingMarketStrategy implements Strategy {
                 int sellScore = 0;
                 String sellReason = "";
                 
-                // RSI超买（>65）
-                if (rsi > 65) {
-                    sellScore += 5;
-                    sellReason += "RSI超买(" + String.format("%.1f", rsi) + "), ";
-                } else if (rsi > 60) {
-                    sellScore += 3;
-                    sellReason += "RSI偏高(" + String.format("%.1f", rsi) + "), ";
-                }
-                
-                // Williams %R超买
-                if (williamsR != null && williamsR > -25) {
-                    sellScore += 4;
+                // Williams %R超买（替代RSI）- 加重权重
+                if (williamsR > -20) {
+                    sellScore += 8;  // 极度超买
+                    sellReason += "Williams极度超买(" + String.format("%.1f", williamsR) + "), ";
+                } else if (williamsR > -30) {
+                    sellScore += 5;  // 超买
                     sellReason += "Williams超买(" + String.format("%.1f", williamsR) + "), ";
-                } else if (williamsR != null && williamsR > -35) {
-                    sellScore += 2;
+                } else if (williamsR > -40) {
+                    sellScore += 3;  // 偏高
                     sellReason += "Williams偏高(" + String.format("%.1f", williamsR) + "), ";
                 }
                 
@@ -178,8 +166,8 @@ public class RangingMarketStrategy implements Strategy {
                     sellReason += "价格偏高, ";
                 }
                 
-                // 震荡市需要较高确认度（≥8分）
-                if (sellScore >= 8) {
+                // 震荡市需要较高确认度（≥12分，提高阈值减少交易频率）
+                if (sellScore >= 12) {
                     int strength = Math.min(60 + sellScore * 3, 90);
                     log.info("[{}] 📉 震荡市做空信号（得分{}）: {}", STRATEGY_NAME, sellScore, sellReason);
                     

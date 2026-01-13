@@ -125,11 +125,13 @@ public class PaperTradingService {
     }
     
     /**
-     * 开仓
+     * 开仓 - 🔥 增强版：支持保存技术指标用于AI学习
      */
     public PaperPosition openPosition(String symbol, String side, BigDecimal entryPrice, 
                                       BigDecimal quantity, BigDecimal stopLoss, BigDecimal takeProfit,
-                                      String strategyName) {
+                                      String strategyName,
+                                      com.ltp.peter.augtrade.service.core.signal.TradingSignal signal,
+                                      com.ltp.peter.augtrade.service.core.strategy.MarketContext context) {
         
         // ✨ 增强：双重检查持仓（内存 + 数据库）
         // 1. 检查内存中的持仓
@@ -199,8 +201,8 @@ public class PaperTradingService {
         log.info("   止盈价格: ${}", takeProfit);
         log.info("   交易数量: {}", quantity);
         
-        // 保存开仓记录到数据库
-        saveOpenOrder(position);
+        // 保存开仓记录到数据库（传递signal和context用于保存指标）
+        saveOpenOrder(position, signal, context);
         
         // 🔔 发送飞书开仓通知
         try {
@@ -530,9 +532,11 @@ public class PaperTradingService {
     }
     
     /**
-     * 保存开仓记录到数据库
+     * 保存开仓记录到数据库 - 🔥 增强版：保存技术指标
      */
-    private void saveOpenOrder(PaperPosition position) {
+    private void saveOpenOrder(PaperPosition position,
+                              com.ltp.peter.augtrade.service.core.signal.TradingSignal signal,
+                              com.ltp.peter.augtrade.service.core.strategy.MarketContext context) {
         try {
             // 1. 保存到订单表
             TradeOrder order = new TradeOrder();
@@ -554,6 +558,9 @@ public class PaperTradingService {
             order.setCreateTime(LocalDateTime.now());
             order.setUpdateTime(LocalDateTime.now());
             order.setExecutedTime(LocalDateTime.now());
+            
+            // 🔥 保存技术指标到订单（用于AI学习）
+            saveIndicatorsToOrder(order, signal, context);
             
             tradeOrderMapper.insert(order);
             log.debug("💾 开仓订单已保存到t_trade_order表");
@@ -770,6 +777,92 @@ public class PaperTradingService {
             
         } catch (Exception e) {
             log.error("同步移动止损状态到数据库失败", e);
+        }
+    }
+    
+    /**
+     * 🔥 新增：保存技术指标到订单（用于AI学习）
+     */
+    private void saveIndicatorsToOrder(TradeOrder order,
+                                      com.ltp.peter.augtrade.service.core.signal.TradingSignal signal,
+                                      com.ltp.peter.augtrade.service.core.strategy.MarketContext context) {
+        if (context == null) {
+            return;
+        }
+        
+        try {
+            // 1. Williams %R
+            Double williamsR = context.getIndicatorAsDouble("WilliamsR");
+            if (williamsR != null) {
+                order.setWilliamsR(BigDecimal.valueOf(williamsR));
+            }
+            
+            // 2. ADX
+            Double adx = context.getIndicatorAsDouble("ADX");
+            if (adx != null) {
+                order.setAdx(BigDecimal.valueOf(adx));
+            }
+            
+            // 3. EMA趋势 (double → BigDecimal)
+            com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend emaTrend = 
+                    context.getIndicator("EMATrend", com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend.class);
+            if (emaTrend != null) {
+                order.setEma20(new BigDecimal(String.valueOf(emaTrend.getEmaShort())));
+                order.setEma50(new BigDecimal(String.valueOf(emaTrend.getEmaLong())));
+            }
+            
+            // 4. K线形态
+            com.ltp.peter.augtrade.service.core.indicator.CandlePattern pattern = 
+                    context.getIndicator("CandlePattern", com.ltp.peter.augtrade.service.core.indicator.CandlePattern.class);
+            if (pattern != null && pattern.hasPattern()) {
+                order.setCandlePattern(pattern.getType().name());
+                order.setCandlePatternStrength(pattern.getStrength());
+            }
+            
+            // 5. 布林带（震荡市才有）
+            com.ltp.peter.augtrade.service.core.indicator.BollingerBands bb = 
+                    context.getIndicator("BollingerBands", com.ltp.peter.augtrade.service.core.indicator.BollingerBands.class);
+            if (bb != null) {
+                order.setBollingerUpper(bb.getUpper());
+                order.setBollingerMiddle(bb.getMiddle());
+                order.setBollingerLower(bb.getLower());
+            }
+            
+            // 6. 信号相关
+            if (signal != null) {
+                order.setSignalStrength(signal.getStrength());
+                order.setSignalScore(signal.getScore());
+            }
+            
+            // 7. ATR和市场状态
+            if (!context.getKlines().isEmpty()) {
+                // 计算ATR (Double → BigDecimal)
+                com.ltp.peter.augtrade.service.core.indicator.ATRCalculator atrCalc = 
+                        new com.ltp.peter.augtrade.service.core.indicator.ATRCalculator();
+                Double atr = atrCalc.calculate(context.getKlines(), 14);
+                if (atr != null) {
+                    order.setAtr(BigDecimal.valueOf(atr));
+                }
+                
+                // 判断市场状态
+                if (adx != null) {
+                    String marketRegime;
+                    if (adx > 30) {
+                        marketRegime = "STRONG_TREND";
+                    } else if (adx >= 20) {
+                        marketRegime = "WEAK_TREND";
+                    } else {
+                        marketRegime = "RANGING";
+                    }
+                    order.setMarketRegime(marketRegime);
+                }
+            }
+            
+            log.debug("✅ 技术指标已保存到订单: Williams={}, ADX={}, 信号强度={}, 市场状态={}", 
+                    williamsR, adx, signal != null ? signal.getStrength() : "N/A", order.getMarketRegime());
+            
+        } catch (Exception e) {
+            log.warn("⚠️ 保存技术指标失败（不影响开仓）", e);
         }
     }
     

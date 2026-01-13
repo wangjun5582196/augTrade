@@ -70,13 +70,12 @@ public class BalancedAggressiveStrategy implements Strategy {
         }
         
         try {
-            // 计算所有指标
+            // 计算所有指标 - 🔥 已删除RSI(与Williams重复)
             Double williamsR = williamsCalculator.calculate(context.getKlines());
-            Double rsi = rsiCalculator.calculate(context.getKlines());
             Double adx = adxCalculator.calculate(context.getKlines());
             CandlePattern pattern = candlePatternAnalyzer.calculate(context.getKlines());
             
-            if (williamsR == null || rsi == null || adx == null) {
+            if (williamsR == null || adx == null) {
                 log.warn("[{}] 指标计算失败", STRATEGY_NAME);
                 return createHoldSignal("指标计算失败", 0, 0);
             }
@@ -101,8 +100,8 @@ public class BalancedAggressiveStrategy implements Strategy {
                 momentum = currentPrice.subtract(price5);
             }
             
-            log.debug("[{}] Williams: {}, RSI: {}, ADX: {}, ML: {}, 动量: {}, K线形态: {}", 
-                    STRATEGY_NAME, williamsR, rsi, adx, String.format("%.2f", mlPrediction), momentum, 
+            log.debug("[{}] Williams: {}, ADX: {}, ML: {}, 动量: {}, K线形态: {}", 
+                    STRATEGY_NAME, williamsR, adx, String.format("%.2f", mlPrediction), momentum, 
                     pattern.hasPattern() ? pattern.getType() : "无");
             
             // 评分系统
@@ -126,23 +125,23 @@ public class BalancedAggressiveStrategy implements Strategy {
                 }
             }
             
-            // Williams评分（权重3）
+            // Williams评分（权重5）- 🔥 从3提高到5,因为删除了RSI
             if (williamsR < -60) {
-                buyScore += 3;
-                log.debug("[{}] Williams超卖 ({}) → +3分", STRATEGY_NAME, williamsR);
+                buyScore += 5;
+                log.debug("[{}] Williams超卖 ({}) → +5分", STRATEGY_NAME, williamsR);
             } else if (williamsR > -40) {
-                sellScore += 3;
-                log.debug("[{}] Williams超买 ({}) → +3分", STRATEGY_NAME, williamsR);
+                sellScore += 5;
+                log.debug("[{}] Williams超买 ({}) → +5分", STRATEGY_NAME, williamsR);
             }
             
-            // RSI评分（权重2）
-            if (rsi < 45) {
-                buyScore += 2;
-                log.debug("[{}] RSI偏低 ({}) → +2分", STRATEGY_NAME, rsi);
-            } else if (rsi > 55) {
-                sellScore += 2;
-                log.debug("[{}] RSI偏高 ({}) → +2分", STRATEGY_NAME, rsi);
-            }
+            // RSI评分 - 🔥 已删除: 与Williams重复,删除后Williams权重从3提高到5
+            // if (rsi < 45) {
+            //     buyScore += 2;
+            //     log.debug("[{}] RSI偏低 ({}) → +2分", STRATEGY_NAME, rsi);
+            // } else if (rsi > 55) {
+            //     sellScore += 2;
+            //     log.debug("[{}] RSI偏高 ({}) → +2分", STRATEGY_NAME, rsi);
+            // }
             
             // ML评分（权重2）
             if (mlPrediction > 0.52) {
@@ -185,10 +184,10 @@ public class BalancedAggressiveStrategy implements Strategy {
             if (buyScore >= requiredScore && buyScore > sellScore) {
                 int strength = calculateSignalStrength(buyScore, requiredScore);
                 String reason = pattern.hasPattern() && pattern.isBullish() ?
-                        String.format("均衡激进策略做多 (评分:%d, Williams:%.1f, RSI:%.1f, 形态:%s)", 
-                                buyScore, williamsR, rsi, pattern.getType().getDescription()) :
-                        String.format("均衡激进策略做多 (评分:%d, Williams:%.1f, RSI:%.1f)", 
-                                buyScore, williamsR, rsi);
+                        String.format("均衡激进策略做多 (评分:%d, Williams:%.1f, 形态:%s)", 
+                                buyScore, williamsR, pattern.getType().getDescription()) :
+                        String.format("均衡激进策略做多 (评分:%d, Williams:%.1f)", 
+                                buyScore, williamsR);
                 
                 // ✨ 记录ML预测（买入信号）
                 recordMLPrediction(context.getSymbol(), mlPrediction, "BUY", mlConfidence, 
@@ -208,10 +207,10 @@ public class BalancedAggressiveStrategy implements Strategy {
             if (sellScore >= requiredScore && sellScore > buyScore) {
                 int strength = calculateSignalStrength(sellScore, requiredScore);
                 String reason = pattern.hasPattern() && pattern.isBearish() ?
-                        String.format("均衡激进策略做空 (评分:%d, Williams:%.1f, RSI:%.1f, 形态:%s)", 
-                                sellScore, williamsR, rsi, pattern.getType().getDescription()) :
-                        String.format("均衡激进策略做空 (评分:%d, Williams:%.1f, RSI:%.1f)", 
-                                sellScore, williamsR, rsi);
+                        String.format("均衡激进策略做空 (评分:%d, Williams:%.1f, 形态:%s)", 
+                                sellScore, williamsR, pattern.getType().getDescription()) :
+                        String.format("均衡激进策略做空 (评分:%d, Williams:%.1f)", 
+                                sellScore, williamsR);
                 
                 // ✨ 记录ML预测（卖出信号）
                 recordMLPrediction(context.getSymbol(), mlPrediction, "SELL", mlConfidence, 
