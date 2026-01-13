@@ -83,8 +83,8 @@ bybit:
     mode: fixed                               # ⭐ 固定模式（更可控）
     
     # 固定模式参数（mode=fixed时使用）- ✨ 优化后的配置
-    stop-loss-dollars: 15                   # 固定止损$15（增加容错空间）
-    take-profit-dollars: 30                 # 固定止盈$30（盈亏比2:1，更易达到）
+    stop-loss-dollars: 20                   # 固定止损$20（增加容错空间，减少频繁止损）
+    take-profit-dollars: 40                 # 固定止盈$40（盈亏比2:1，更易达到）
     
     # ATR动态模式参数（mode=atr时使用）
     atr-stop-loss-multiplier: 2.0           # ATR止损倍数（增加到2.0，更宽松）

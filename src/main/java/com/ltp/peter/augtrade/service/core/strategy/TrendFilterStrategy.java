@@ -62,10 +62,53 @@ public class TrendFilterStrategy implements Strategy {
             
             log.info("[{}] {}, 强度: {}", STRATEGY_NAME, trendDesc, trendStrength);
             
+            // ✨ 优化1: 震荡市识别 - EMA距离太近说明震荡
+            double emaDistance = Math.abs(trend.getEmaShort() - trend.getEmaLong());
+            double emaDistancePercent = (emaDistance / trend.getEmaLong()) * 100;
+            
+            if (emaDistancePercent < 0.15 && trendStrength < 30) {
+                // EMA距离<0.15%且趋势强度<30，判定为震荡市
+                log.info("[{}] ⚠️ 震荡市（EMA距离{:.2f}%, 强度{}），降低开仓", 
+                        STRATEGY_NAME, emaDistancePercent, trendStrength);
+                return createHoldSignal(String.format("震荡市（EMA距离%.2f%%）", emaDistancePercent));
+            }
+            
             // 判断趋势并生成信号
             if (trend.isUpTrend()) {
                 // 上升趋势：强烈建议做多
                 if (trendStrength >= MIN_TREND_STRENGTH) {
+                    // ✨ 优化2: 高位过滤 - 避免在最高点附近开仓
+                    double recentHigh = context.getKlines().stream()
+                            .limit(20)  // 最近20根K线
+                            .mapToDouble(k -> k.getHighPrice().doubleValue())
+                            .max()
+                            .orElse(0);
+                    
+                    double currentPrice = context.getCurrentPrice().doubleValue();
+                    
+                    // 如果当前价格接近最近高点（>99%），降低信号强度
+                    if (currentPrice > recentHigh * 0.99) {
+                        int reducedStrength = Math.min(70 + trendStrength / 2, 95) - 20;  // 降低20强度
+                        log.info("[{}] ⚠️ 价格接近高点（${} vs ${}），降低强度至{}", 
+                                STRATEGY_NAME, currentPrice, recentHigh, reducedStrength);
+                        
+                        if (reducedStrength < 60) {
+                            return createHoldSignal(String.format("上升趋势但价格过高（$%.2f接近$%.2f）", 
+                                    currentPrice, recentHigh));
+                        }
+                        
+                        return TradingSignal.builder()
+                                .type(TradingSignal.SignalType.BUY)
+                                .strength(reducedStrength)
+                                .score(STRATEGY_WEIGHT)
+                                .strategyName(STRATEGY_NAME)
+                                .reason(String.format("上升趋势但价格偏高 - %s (强度:%d)", trendDesc, trendStrength))
+                                .symbol(context.getSymbol())
+                                .currentPrice(context.getCurrentPrice())
+                                .build();
+                    }
+                    
+                    // 正常上升趋势信号
                     int strength = Math.min(70 + trendStrength / 2, 95);
                     String reason = String.format("上升趋势 - %s (强度:%d)", trendDesc, trendStrength);
                     
@@ -89,6 +132,38 @@ public class TrendFilterStrategy implements Strategy {
             } else if (trend.isDownTrend()) {
                 // 下降趋势：强烈建议做空
                 if (trendStrength >= MIN_TREND_STRENGTH) {
+                    // ✨ 优化3: 低位过滤 - 避免在最低点附近开空仓
+                    double recentLow = context.getKlines().stream()
+                            .limit(20)  // 最近20根K线
+                            .mapToDouble(k -> k.getLowPrice().doubleValue())
+                            .min()
+                            .orElse(Double.MAX_VALUE);
+                    
+                    double currentPrice = context.getCurrentPrice().doubleValue();
+                    
+                    // 如果当前价格接近最近低点（<101%），降低信号强度
+                    if (currentPrice < recentLow * 1.01) {
+                        int reducedStrength = Math.min(70 + trendStrength / 2, 95) - 20;  // 降低20强度
+                        log.info("[{}] ⚠️ 价格接近低点（${} vs ${}），降低强度至{}", 
+                                STRATEGY_NAME, currentPrice, recentLow, reducedStrength);
+                        
+                        if (reducedStrength < 60) {
+                            return createHoldSignal(String.format("下降趋势但价格过低（$%.2f接近$%.2f）", 
+                                    currentPrice, recentLow));
+                        }
+                        
+                        return TradingSignal.builder()
+                                .type(TradingSignal.SignalType.SELL)
+                                .strength(reducedStrength)
+                                .score(STRATEGY_WEIGHT)
+                                .strategyName(STRATEGY_NAME)
+                                .reason(String.format("下降趋势但价格偏低 - %s (强度:%d)", trendDesc, trendStrength))
+                                .symbol(context.getSymbol())
+                                .currentPrice(context.getCurrentPrice())
+                                .build();
+                    }
+                    
+                    // 正常下降趋势信号
                     int strength = Math.min(70 + trendStrength / 2, 95);
                     String reason = String.format("下降趋势 - %s (强度:%d)", trendDesc, trendStrength);
                     
