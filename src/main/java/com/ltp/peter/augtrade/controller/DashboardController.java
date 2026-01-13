@@ -527,4 +527,43 @@ public class DashboardController {
         
         return result;
     }
+
+    /**
+     * 获取黄金实时价格2（从Bybit）
+     */
+    @GetMapping("/gold-price2")
+    public Map<String, Object> getGoldPrice2() {
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            String symbol = "XAUUSD+"; // 黄金永续合约
+
+            if (bybitTradingService != null) {
+                BigDecimal price = bybitTradingService.getCurrentPrice(symbol);
+
+                if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                    result.put("success", true);
+                    result.put("symbol", symbol);
+                    result.put("price", price.setScale(2, RoundingMode.HALF_UP));
+                    result.put("timestamp", System.currentTimeMillis());
+
+                    log.debug("获取{}价格成功: {}", symbol, price);
+                } else {
+                    result.put("success", false);
+                    result.put("message", "获取价格失败");
+                }
+            } else {
+                result.put("success", false);
+                result.put("message", "Bybit服务未启用");
+            }
+
+        } catch (Exception e) {
+            log.error("获取黄金价格失败", e);
+            result.put("success", false);
+            result.put("message", "获取价格失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
 }

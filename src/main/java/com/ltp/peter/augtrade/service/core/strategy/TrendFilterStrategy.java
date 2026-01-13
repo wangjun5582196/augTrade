@@ -27,13 +27,16 @@ import org.springframework.stereotype.Service;
 public class TrendFilterStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "TrendFilter";
-    private static final int STRATEGY_WEIGHT = 20;  // 最高权重
+    private static final int STRATEGY_WEIGHT = 12;  // ✅ 从20降低到12，避免单一策略主导
     private static final int SHORT_PERIOD = 20;
     private static final int LONG_PERIOD = 50;
     private static final int MIN_TREND_STRENGTH = 15;  // 最小趋势强度
     
     @Autowired
     private EMACalculator emaCalculator;
+    
+    @Autowired
+    private MarketRegimeDetector regimeDetector;
     
     private boolean enabled = true;
     
@@ -45,6 +48,20 @@ public class TrendFilterStrategy implements Strategy {
         }
         
         try {
+            // ✅ 市场环境检测（优化版）
+            MarketRegimeDetector.MarketRegime regime = regimeDetector.detectRegime(context.getKlines());
+            
+            // 震荡市和盘整市，TrendFilter不适用（EMA信号不可靠）
+            if (regime == MarketRegimeDetector.MarketRegime.CHOPPY || 
+                regime == MarketRegimeDetector.MarketRegime.CONSOLIDATION) {
+                log.warn("[{}] ⚠️ {}市场，EMA趋势策略不适用，交给震荡市策略处理", 
+                        STRATEGY_NAME, regime.getDescription());
+                return createHoldSignal(String.format("%s市场，EMA不可靠", regime.getDescription()));
+            }
+            
+            // 只在趋势市（强趋势/弱趋势）使用EMA策略
+            log.info("[{}] ✅ {}市场，EMA趋势策略适用", STRATEGY_NAME, regime.getDescription());
+            
             // 计算EMA趋势
             EMACalculator.EMATrend trend = emaCalculator.calculateTrend(
                     context.getKlines(), SHORT_PERIOD, LONG_PERIOD);

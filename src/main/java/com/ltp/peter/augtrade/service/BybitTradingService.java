@@ -433,4 +433,8 @@ public class BybitTradingService {
         }
         return false;
     }
+
+    public static void main(String[] args) {
+
+    }
 }
