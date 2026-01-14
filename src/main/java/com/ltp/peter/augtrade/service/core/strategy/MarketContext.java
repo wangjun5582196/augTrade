@@ -65,7 +65,15 @@ public class MarketContext {
     }
     
     /**
-     * 获取指标值
+     * 获取指标值（泛型方法）
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getIndicator(String name) {
+        return (T) indicators.get(name);
+    }
+    
+    /**
+     * 获取指标值（带类型参数）
      */
     public <T> T getIndicator(String name, Class<T> type) {
         Object value = indicators.get(name);

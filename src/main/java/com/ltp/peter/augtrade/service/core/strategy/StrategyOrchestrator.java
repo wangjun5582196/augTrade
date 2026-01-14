@@ -211,16 +211,13 @@ public class StrategyOrchestrator {
             //             macd.getMacdLine(), macd.getSignalLine(), macd.getHistogram());
             // }
             
-            // Bollinger Bands - 🔥 修复: 在震荡市和弱趋势市(ADX<30)时都计算，确保RangingMarketStrategy能获取数据
-            if (adx != null && adx < 30) {
-                BollingerBands bb = bollingerBandsCalculator.calculate(klines);
-                if (bb != null) {
-                    context.addIndicator("BollingerBands", bb);
-                    log.debug("[StrategyOrchestrator] 震荡/弱趋势市(ADX={}) - BB: Upper = {}, Middle = {}, Lower = {}", 
-                            String.format("%.1f", adx), bb.getUpper(), bb.getMiddle(), bb.getLower());
-                }
-            } else {
-                log.debug("[StrategyOrchestrator] 强趋势市(ADX={}) - 跳过布林带计算", adx != null ? String.format("%.1f", adx) : "N/A");
+            // Bollinger Bands - 🔥 P0修复: 始终计算布林带,用于价格位置判断
+            BollingerBands bb = bollingerBandsCalculator.calculate(klines);
+            if (bb != null) {
+                context.addIndicator("BollingerBands", bb);
+                log.debug("[StrategyOrchestrator] BB: Upper = {}, Middle = {}, Lower = {} (ADX={})", 
+                        bb.getUpper(), bb.getMiddle(), bb.getLower(), 
+                        adx != null ? String.format("%.1f", adx) : "N/A");
             }
             
             // Candle Pattern

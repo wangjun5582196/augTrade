@@ -1,10 +1,15 @@
 package com.ltp.peter.augtrade.service.core.strategy;
 
+import com.ltp.peter.augtrade.service.core.indicator.BollingerBands;
+import com.ltp.peter.augtrade.service.core.indicator.CandlePattern;
+import com.ltp.peter.augtrade.service.core.indicator.EMACalculator;
 import com.ltp.peter.augtrade.service.core.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -90,37 +95,64 @@ public class CompositeStrategy implements Strategy {
             
             log.info("[{}] 综合评分 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
             
+            // 🔥 P0修复: 先检查WEAK_TREND市场
+            Double adx = context.getIndicator("ADX");
+            if (adx != null && adx >= 15 && adx < 28) {
+                log.warn("[{}] ⏸️ WEAK_TREND市场(ADX={}),暂停交易", STRATEGY_NAME, String.format("%.2f", adx));
+                return createHoldSignal(String.format("弱趋势市场不交易(ADX=%.2f)", adx), buyScore, sellScore);
+            }
+            
             // 根据得分生成信号
             if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                int strength = calculateSignalStrength(buyScore, sellScore);
-                String reason = String.format("综合策略做多 (得分:%d) [%s]", 
-                        buyScore, String.join(", ", buyReasons));
-                
-                return TradingSignal.builder()
+                // 🔥 P0修复: 生成做多信号前进行过滤检查
+                TradingSignal buySignal = TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
-                        .strength(strength)
+                        .strength(calculateSignalStrength(buyScore, sellScore))
                         .score(buyScore)
                         .strategyName(STRATEGY_NAME)
-                        .reason(reason)
+                        .reason(String.format("综合策略做多 (得分:%d) [%s]", 
+                                buyScore, String.join(", ", buyReasons)))
                         .symbol(context.getSymbol())
                         .currentPrice(context.getCurrentPrice())
                         .build();
+                
+                // 价格位置过滤
+                if (!validatePricePosition(context, buySignal)) {
+                    return createHoldSignal("价格位置不合理,做多信号被过滤", buyScore, sellScore);
+                }
+                
+                // K线形态检查
+                if (!validateCandlePattern(context, TradingSignal.SignalType.BUY)) {
+                    return createHoldSignal("K线形态不支持做多", buyScore, sellScore);
+                }
+                
+                return buySignal;
             }
             
             if (sellScore >= SIGNAL_THRESHOLD && sellScore > buyScore) {
-                int strength = calculateSignalStrength(sellScore, buyScore);
-                String reason = String.format("综合策略做空 (得分:%d) [%s]", 
-                        sellScore, String.join(", ", sellReasons));
-                
-                return TradingSignal.builder()
+                // 🔥 P0修复: 生成做空信号前进行过滤检查
+                TradingSignal sellSignal = TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
-                        .strength(strength)
+                        .strength(calculateSignalStrength(sellScore, buyScore))
                         .score(sellScore)
                         .strategyName(STRATEGY_NAME)
-                        .reason(reason)
+                        .reason(String.format("综合策略做空 (得分:%d) [%s]", 
+                                sellScore, String.join(", ", sellReasons)))
                         .symbol(context.getSymbol())
                         .currentPrice(context.getCurrentPrice())
                         .build();
+                
+                // 价格位置过滤
+                if (!validatePricePosition(context, sellSignal)) {
+                    return createHoldSignal("价格位置不合理,做空信号被过滤", buyScore, sellScore);
+                }
+                
+                // K线形态检查
+                if (!validateCandlePattern(context, TradingSignal.SignalType.SELL)) {
+                    return createHoldSignal("K线形态不支持做空", buyScore, sellScore);
+                }
+                
+                return sellSignal;
             }
             
             // 得分不足或冲突，观望
@@ -210,5 +242,127 @@ public class CompositeStrategy implements Strategy {
         return getActiveStrategies().stream()
                 .mapToInt(Strategy::getWeight)
                 .sum();
+    }
+    
+    /**
+     * 🔥 P0修复: 验证价格位置是否合理
+     * 
+     * 规则:
+     * - 做多: 价格不能高于布林上轨
+     * - 做空: 价格不能低于布林下轨
+     * - 如果无布林带,使用EMA判断(价格偏离EMA20不超过0.5%)
+     */
+    private boolean validatePricePosition(MarketContext context, TradingSignal signal) {
+        if (signal.getType() == TradingSignal.SignalType.HOLD) {
+            return true;
+        }
+        
+        BollingerBands bb = context.getIndicator("BollingerBands");
+        BigDecimal price = context.getCurrentPrice();
+        
+        // 如果没有布林带,使用EMA判断
+        if (bb == null) {
+            EMACalculator.EMATrend trend = context.getIndicator("EMATrend");
+            if (trend == null) {
+                log.warn("[{}] 无布林带和EMA数据,跳过价格位置检查", STRATEGY_NAME);
+                return true;
+            }
+            
+            double priceVal = price.doubleValue();
+            double emaShort = trend.getEmaShort();  // 使用emaShort (EMA20)
+            
+            if (signal.getType() == TradingSignal.SignalType.BUY) {
+                // 做多: 价格不能高于EMA20超过0.5%
+                if (priceVal > emaShort * 1.005) {
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过0.5%", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
+                    return false;
+                }
+            } else if (signal.getType() == TradingSignal.SignalType.SELL) {
+                // 做空: 价格不能低于EMA20超过0.5%
+                if (priceVal < emaShort * 0.995) {
+                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过0.5%", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
+                    return false;
+                }
+            }
+            return true;
+        }
+        
+        // 有布林带,严格检查
+        Double upper = bb.getUpper();
+        Double lower = bb.getLower();
+        Double middle = bb.getMiddle();
+        double priceVal = price.doubleValue();
+        
+        if (signal.getType() == TradingSignal.SignalType.BUY) {
+            // 做多: 价格不能高于布林上轨
+            if (priceVal > upper) {
+                double exceeds = priceVal - upper;
+                log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于布林上轨{} (+{} USD)", 
+                        STRATEGY_NAME, 
+                        String.format("%.2f", priceVal), 
+                        String.format("%.2f", upper), 
+                        String.format("%.2f", exceeds));
+                return false;
+            }
+        } else if (signal.getType() == TradingSignal.SignalType.SELL) {
+            // 做空: 价格不能低于布林下轨
+            if (priceVal < lower) {
+                double below = lower - priceVal;
+                log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于布林下轨{} (-{} USD)", 
+                        STRATEGY_NAME, 
+                        String.format("%.2f", priceVal), 
+                        String.format("%.2f", lower), 
+                        String.format("%.2f", below));
+                return false;
+            }
+        }
+        
+        log.debug("[{}] ✅ 价格位置检查通过: 价格{} 在布林带[{}, {}]内", 
+                STRATEGY_NAME, 
+                String.format("%.2f", priceVal), 
+                String.format("%.2f", lower), 
+                String.format("%.2f", upper));
+        return true;
+    }
+    
+    /**
+     * 🔥 P0修复: 验证K线形态是否支持交易
+     * 
+     * 规则:
+     * - DOJI等不确定形态: 不交易
+     * - 形态方向与信号方向相反: 不交易
+     */
+    private boolean validateCandlePattern(MarketContext context, TradingSignal.SignalType signalType) {
+        CandlePattern pattern = context.getIndicator("CandlePattern");
+        if (pattern == null || !pattern.hasPattern()) {
+            return true; // 无形态,不限制
+        }
+        
+        CandlePattern.Direction pDir = pattern.getDirection();
+        
+        // DOJI等不确定形态: 不交易
+        if (pDir == CandlePattern.Direction.NEUTRAL) {
+            log.warn("[{}] ⏸️ 不确定K线形态{},暂停交易", STRATEGY_NAME, pattern.getType().getDescription());
+            return false;
+        }
+        
+        // 方向相反: 不交易
+        if (signalType == TradingSignal.SignalType.BUY && 
+            pDir == CandlePattern.Direction.BEARISH) {
+            log.warn("[{}] ⛔ BUY信号与看跌形态{}矛盾", STRATEGY_NAME, pattern.getType().getDescription());
+            return false;
+        }
+        
+        if (signalType == TradingSignal.SignalType.SELL && 
+            pDir == CandlePattern.Direction.BULLISH) {
+            log.warn("[{}] ⛔ SELL信号与看涨形态{}矛盾", STRATEGY_NAME, pattern.getType().getDescription());
+            return false;
+        }
+        
+        log.debug("[{}] ✅ K线形态检查通过: {}方向{}", 
+                STRATEGY_NAME, pattern.getType().getDescription(), pDir.getDescription());
+        return true;
     }
 }
