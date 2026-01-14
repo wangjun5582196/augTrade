@@ -560,6 +560,33 @@
             </div>
         </div>
 
+        <!-- 🔥 Dashboard增强方案 - P0核心模块 -->
+        <div class="content-grid">
+            <!-- P0-1: 实时信号监控 -->
+            <div class="card">
+                <h2>📡 实时信号监控</h2>
+                <div id="signalContent" class="loading">加载中...</div>
+            </div>
+
+            <!-- P0-2: 交易质量分析 -->
+            <div class="card">
+                <h2>🎯 交易质量分析</h2>
+                <div id="qualityContent" class="loading">加载中...</div>
+            </div>
+
+            <!-- P0-3: 风险指标监控 -->
+            <div class="card">
+                <h2>⚠️ 风险指标监控</h2>
+                <div id="riskContent" class="loading">加载中...</div>
+            </div>
+
+            <!-- P0-4: 做多vs做空分析 -->
+            <div class="card">
+                <h2>🔥 做多vs做空对比</h2>
+                <div id="directionContent" class="loading">加载中...</div>
+            </div>
+        </div>
+
         <!-- Content Grid -->
         <div class="content-grid">
             <!-- Current Positions -->
@@ -593,6 +620,18 @@
                 <div id="dailyPnlChart" class="chart-container">
                     <div class="loading">加载中...</div>
                 </div>
+            </div>
+            
+            <!-- P1-1: 持仓时长分析 -->
+            <div class="card">
+                <h2>⏱️ 持仓时长分析</h2>
+                <div id="holdingTimeContent" class="loading">加载中...</div>
+            </div>
+            
+            <!-- P1-2: 开仓时机分析 -->
+            <div class="card">
+                <h2>🕐 开仓时机分析</h2>
+                <div id="timingContent" class="loading">加载中...</div>
             </div>
 
             <!-- Cumulative Profit Chart -->
@@ -634,11 +673,393 @@
                 loadGoldPrice(),
                 loadCumulativeProfitChart(),
                 loadDailyProfitLineChart(),
-                loadTodayPieChart()
+                loadTodayPieChart(),
+                // 🔥 P0核心功能
+                loadCurrentSignal(),
+                loadTradeQuality(),
+                loadRiskMetrics(),
+                loadDirectionAnalysis(),
+                // 🔥 P1次要功能
+                loadHoldingTimeAnalysis(),
+                loadTimingAnalysis()
             ]);
             
             document.getElementById('lastUpdate').textContent = 
                 `最后更新: ${new Date().toLocaleString('zh-CN')}`;
+        }
+
+        // 🔥 P0-1: 加载实时信号监控
+        async function loadCurrentSignal() {
+            const container = document.getElementById('signalContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/current-signal');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const canOpenIcon = data.canOpen ? '✅' : '❌';
+                    const signalColor = data.signal === 'BUY' ? '#10b981' : data.signal === 'SELL' ? '#ef4444' : '#999';
+                    
+                    let html = `
+                        <div style="background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <div>
+                                    <span style="font-size: 18px; font-weight: bold; color: ${signalColor};">
+                                        ${data.signal === 'BUY' ? '🔥 做多' : data.signal === 'SELL' ? '🔻 做空' : '⏸️ 观望'}
+                                    </span>
+                                    <span style="margin-left: 10px; color: #666;">强度: ${data.strength}/100</span>
+                                </div>
+                                <div style="font-size: 24px;">${canOpenIcon}</div>
+                            </div>
+                            <div style="font-size: 13px; color: #666; margin-bottom: 8px;">
+                                <strong>信号来源:</strong> ${data.reason || '无'}
+                            </div>
+                            ${!data.canOpen && data.rejectReason ? `
+                                <div style="font-size: 13px; color: #ef4444; background: #fee2e2; padding: 8px; border-radius: 6px;">
+                                    <strong>拒绝原因:</strong> ${data.rejectReason}
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                            <div style="background: #f8f9fa; padding: 10px; border-radius: 8px;">
+                                <div style="font-size: 12px; color: #666;">市场状态</div>
+                                <div style="font-size: 14px; font-weight: bold; color: #333;">${data.marketRegime || '未知'}</div>
+                                <div style="font-size: 11px; color: #999;">ADX: ${data.adx || '--'}</div>
+                            </div>
+                            <div style="background: #f8f9fa; padding: 10px; border-radius: 8px;">
+                                <div style="font-size: 12px; color: #666;">价格位置</div>
+                                <div style="font-size: 14px; font-weight: bold; color: #333;">${data.pricePosition || '--'}%</div>
+                                <div style="font-size: 11px; color: #999;">布林带位置</div>
+                            </div>
+                        </div>
+                        
+                        <div style="background: #f8f9fa; border-radius: 10px; padding: 12px; margin-bottom: 10px;">
+                            <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 8px;">🗳️ 策略投票</div>
+                    `;
+                    
+                    if (data.votes && data.votes.length > 0) {
+                        data.votes.forEach(vote => {
+                            const voteIcon = vote.vote === 'BUY' ? '📈' : vote.vote === 'SELL' ? '📉' : '⏸️';
+                            const voteColor = vote.vote === 'BUY' ? '#10b981' : vote.vote === 'SELL' ? '#ef4444' : '#999';
+                            html += `
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #e5e7eb;">
+                                    <span style="font-size: 12px; color: #666;">${vote.strategy}</span>
+                                    <span style="font-size: 12px;">
+                                        <span style="color: ${voteColor};">${voteIcon} ${vote.vote}</span>
+                                        <span style="color: #999; margin-left: 8px;">权重:${vote.weight}</span>
+                                    </span>
+                                </div>
+                            `;
+                        });
+                    } else {
+                        html += '<div style="text-align: center; color: #999; font-size: 12px;">暂无投票数据</div>';
+                    }
+                    
+                    html += '</div>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">获取信号失败</div>';
+                }
+            } catch (error) {
+                console.error('加载实时信号失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        // 🔥 P0-2: 加载交易质量分析
+        async function loadTradeQuality() {
+            const container = document.getElementById('qualityContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/trade-quality');
+                const data = await response.json();
+                
+                if (data.success) {
+                    let html = `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 10px;">
+                                📊 按信号强度分布 (今日${data.totalTrades}笔)
+                            </div>
+                    `;
+                    
+                    const strengthRanges = ['90-100', '70-89', '50-69', '<50'];
+                    strengthRanges.forEach(range => {
+                        const stats = data.byStrength[range];
+                        if (stats && stats.count > 0) {
+                            const winRate = parseFloat(stats.winRate);
+                            const color = winRate >= 60 ? '#10b981' : winRate >= 40 ? '#f59e0b' : '#ef4444';
+                            html += `
+                                <div style="background: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 12px; font-weight: bold;">${range}分</span>
+                                        <span style="font-size: 11px; color: #666;">${stats.count}笔</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
+                                        <span style="font-size: 13px; color: ${color}; font-weight: bold;">胜率: ${stats.winRate}%</span>
+                                        <span style="font-size: 12px; color: ${parseFloat(stats.totalPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(stats.totalPnl)}
+                                        </span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    });
+                    
+                    html += `
+                        </div>
+                        <div>
+                            <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 10px;">
+                                🌊 按市场状态分布
+                            </div>
+                    `;
+                    
+                    const marketStates = {
+                        'STRONG_TREND': '强趋势',
+                        'WEAK_TREND': '弱趋势',
+                        'RANGING': '震荡市',
+                        'UNKNOWN': '未知'
+                    };
+                    
+                    for (const [state, label] of Object.entries(marketStates)) {
+                        const stats = data.byMarket[state];
+                        if (stats && stats.count > 0) {
+                            const winRate = parseFloat(stats.winRate);
+                            const color = winRate >= 60 ? '#10b981' : winRate >= 40 ? '#f59e0b' : '#ef4444';
+                            html += `
+                                <div style="background: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 12px; font-weight: bold;">${label}</span>
+                                        <span style="font-size: 11px; color: #666;">${stats.count}笔</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
+                                        <span style="font-size: 13px; color: ${color}; font-weight: bold;">胜率: ${stats.winRate}%</span>
+                                        <span style="font-size: 12px; color: ${parseFloat(stats.totalPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(stats.totalPnl)}
+                                        </span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    html += '</div>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">暂无数据</div>';
+                }
+            } catch (error) {
+                console.error('加载交易质量分析失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        // 🔥 P0-3: 加载风险指标监控
+        async function loadRiskMetrics() {
+            const container = document.getElementById('riskContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/risk-metrics');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const hasPosition = data.hasOpenPosition;
+                    const holdingTime = data.currentHoldingTime;
+                    const holdingMinutes = holdingTime ? Math.floor(holdingTime / 60) : 0;
+                    const holdingSeconds = holdingTime ? holdingTime % 60 : 0;
+                    
+                    let html = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                            <div style="background: #f8f9fa; padding: 12px; border-radius: 8px;">
+                                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">当前ATR</div>
+                                <div style="font-size: 18px; font-weight: bold; color: #3b82f6;">
+                                    ${data.currentATR || '--'}
+                                </div>
+                            </div>
+                            <div style="background: #f8f9fa; padding: 12px; border-radius: 8px;">
+                                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">盈亏比</div>
+                                <div style="font-size: 18px; font-weight: bold; color: #3b82f6;">
+                                    ${data.riskRewardRatio || '--'}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div style="background: #f8f9fa; border-radius: 10px; padding: 12px; margin-bottom: 10px;">
+                            <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 8px;">
+                                ⚡ 动态止损止盈
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 6px 0;">
+                                <span style="font-size: 12px; color: #666;">止损 (2x ATR):</span>
+                                <span style="font-size: 13px; font-weight: bold; color: #ef4444;">
+                                    ${data.dynamicStopLoss ? '$' + data.dynamicStopLoss : '--'}
+                                </span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; padding: 6px 0;">
+                                <span style="font-size: 12px; color: #666;">止盈 (3x ATR):</span>
+                                <span style="font-size: 13px; font-weight: bold; color: #10b981;">
+                                    ${data.dynamicTakeProfit ? '$' + data.dynamicTakeProfit : '--'}
+                                </span>
+                            </div>
+                        </div>
+                        
+                        ${hasPosition ? `
+                        <div style="background: #dbeafe; border-radius: 10px; padding: 12px; margin-bottom: 10px;">
+                            <div style="font-size: 13px; font-weight: bold; color: #1e40af; margin-bottom: 8px;">
+                                ⏱️ 当前持仓时长
+                            </div>
+                            <div style="font-size: 20px; font-weight: bold; color: #1e40af; text-align: center;">
+                                ${holdingMinutes}分${holdingSeconds}秒
+                            </div>
+                            <div style="font-size: 11px; color: #666; text-align: center; margin-top: 5px;">
+                                最小保护期: 10分钟 | 最大持仓: 30分钟
+                            </div>
+                        </div>
+                        ` : ''}
+                        
+                        <div style="background: #f8f9fa; border-radius: 10px; padding: 12px;">
+                            <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 8px;">
+                                📉 今日最大回撤
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 18px; font-weight: bold; color: #ef4444;">
+                                    ${formatCurrency(data.todayMaxDrawdown)}
+                                </span>
+                                <span style="font-size: 13px; color: #666;">
+                                    (${parseFloat(data.todayMaxDrawdownPercent).toFixed(2)}%)
+                                </span>
+                            </div>
+                            <div style="font-size: 11px; color: #666; margin-top: 5px;">
+                                风险预算剩余: ${formatCurrency(data.riskBudgetRemaining)}
+                            </div>
+                        </div>
+                    `;
+                    
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">加载失败</div>';
+                }
+            } catch (error) {
+                console.error('加载风险指标失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        // 🔥 P0-4: 加载做多vs做空分析
+        async function loadDirectionAnalysis() {
+            const container = document.getElementById('directionContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/direction-analysis');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const longData = data.long;
+                    const shortData = data.short;
+                    
+                    let html = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <!-- 做多统计 -->
+                            <div style="background: linear-gradient(135deg, #dcfce7 0%, #a7f3d0 100%); border-radius: 10px; padding: 15px;">
+                                <div style="font-size: 16px; font-weight: bold; color: #166534; margin-bottom: 10px;">
+                                    📈 做多
+                                </div>
+                                <div style="font-size: 24px; font-weight: bold; color: #166534; margin-bottom: 10px;">
+                                    ${longData.count}笔
+                                </div>
+                                <div style="background: white; border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">胜率:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(longData.winRate) >= 50 ? '#10b981' : '#ef4444'};">
+                                            ${longData.winRate}%
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">总盈亏:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(longData.totalPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(longData.totalPnl)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">平均盈亏:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(longData.avgPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(longData.avgPnl)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">最大盈利:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: #10b981;">
+                                            ${formatCurrency(longData.maxProfit)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between;">
+                                        <span style="font-size: 12px; color: #666;">最大亏损:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: #ef4444;">
+                                            ${formatCurrency(longData.maxLoss)}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 做空统计 -->
+                            <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-radius: 10px; padding: 15px;">
+                                <div style="font-size: 16px; font-weight: bold; color: #991b1b; margin-bottom: 10px;">
+                                    📉 做空
+                                </div>
+                                <div style="font-size: 24px; font-weight: bold; color: #991b1b; margin-bottom: 10px;">
+                                    ${shortData.count}笔
+                                </div>
+                                <div style="background: white; border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">胜率:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(shortData.winRate) >= 50 ? '#10b981' : '#ef4444'};">
+                                            ${shortData.winRate}%
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">总盈亏:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(shortData.totalPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(shortData.totalPnl)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">平均盈亏:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: ${parseFloat(shortData.avgPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(shortData.avgPnl)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                        <span style="font-size: 12px; color: #666;">最大盈利:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: #10b981;">
+                                            ${formatCurrency(shortData.maxProfit)}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between;">
+                                        <span style="font-size: 12px; color: #666;">最大亏损:</span>
+                                        <span style="font-size: 13px; font-weight: bold; color: #ef4444;">
+                                            ${formatCurrency(shortData.maxLoss)}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        ${shortData.count > 0 && parseFloat(shortData.winRate) < 40 ? `
+                        <div style="background: #fef3c7; border: 2px solid #f59e0b; border-radius: 10px; padding: 12px; margin-top: 15px; text-align: center;">
+                            <div style="font-size: 14px; font-weight: bold; color: #92400e;">
+                                ⚠️ 警告: 做空策略胜率过低，建议暂停做空交易
+                            </div>
+                        </div>
+                        ` : ''}
+                    `;
+                    
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">暂无数据</div>';
+                }
+            } catch (error) {
+                console.error('加载方向分析失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
         }
 
         // Load overview statistics
@@ -1376,6 +1797,167 @@
                 </span>
             `;
             container.appendChild(netPnlDiv);
+        }
+
+        // 🔥 P1-1: 加载持仓时长分析
+        async function loadHoldingTimeAnalysis() {
+            const container = document.getElementById('holdingTimeContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/holding-time-analysis');
+                const data = await response.json();
+                
+                if (data.success && data.totalTrades > 0) {
+                    const avgMinutes = Math.floor(data.avgDuration / 60);
+                    const avgSeconds = data.avgDuration % 60;
+                    const minMinutes = Math.floor(data.minDuration / 60);
+                    const maxMinutes = Math.floor(data.maxDuration / 60);
+                    
+                    let html = `
+                        <div style="background: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 15px;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center;">
+                                <div>
+                                    <div style="font-size: 12px; color: #666;">平均时长</div>
+                                    <div style="font-size: 18px; font-weight: bold; color: #3b82f6;">
+                                        ${avgMinutes}分${avgSeconds}秒
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 12px; color: #666;">最短</div>
+                                    <div style="font-size: 18px; font-weight: bold; color: #10b981;">
+                                        ${minMinutes}分钟
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style="font-size: 12px; color: #666;">最长</div>
+                                    <div style="font-size: 18px; font-weight: bold; color: #ef4444;">
+                                        ${maxMinutes}分钟
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 10px;">
+                            ⏱️ 按时长分组统计
+                        </div>
+                    `;
+                    
+                    const ranges = ['<5分钟', '5-15分钟', '15-30分钟', '>30分钟'];
+                    ranges.forEach(range => {
+                        const stats = data.byDuration[range];
+                        if (stats && stats.count > 0) {
+                            const winRate = parseFloat(stats.winRate);
+                            const color = winRate >= 60 ? '#10b981' : winRate >= 40 ? '#f59e0b' : '#ef4444';
+                            html += `
+                                <div style="background: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                        <span style="font-size: 13px; font-weight: bold;">${range}</span>
+                                        <span style="font-size: 11px; color: #666;">${stats.count}笔</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 13px; color: ${color}; font-weight: bold;">
+                                            胜率: ${stats.winRate}%
+                                        </span>
+                                        <span style="font-size: 12px; color: ${parseFloat(stats.avgPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            平均: ${formatCurrency(stats.avgPnl)}
+                                        </span>
+                                    </div>
+                                    <div style="font-size: 11px; color: #666; margin-top: 3px;">
+                                        总盈亏: <span style="color: ${parseFloat(stats.totalPnl) >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${formatCurrency(stats.totalPnl)}
+                                        </span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    });
+                    
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">今日暂无交易数据</div>';
+                }
+            } catch (error) {
+                console.error('加载持仓时长分析失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+
+        // 🔥 P1-2: 加载开仓时机分析
+        async function loadTimingAnalysis() {
+            const container = document.getElementById('timingContent');
+            
+            try {
+                const response = await fetch('/api/dashboard/timing-analysis');
+                const data = await response.json();
+                
+                if (data.success) {
+                    let html = '';
+                    
+                    // 显示最佳和最差时段
+                    if (data.bestSlot && data.worstSlot) {
+                        html += `
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                                <div style="background: linear-gradient(135deg, #dcfce7 0%, #a7f3d0 100%); padding: 12px; border-radius: 8px;">
+                                    <div style="font-size: 12px; color: #166534; margin-bottom: 5px;">🏆 最佳时段</div>
+                                    <div style="font-size: 16px; font-weight: bold; color: #166534;">
+                                        ${data.bestSlot}
+                                    </div>
+                                    <div style="font-size: 13px; color: #10b981; margin-top: 3px;">
+                                        ${formatCurrency(data.bestPnl)}
+                                    </div>
+                                </div>
+                                <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); padding: 12px; border-radius: 8px;">
+                                    <div style="font-size: 12px; color: #991b1b; margin-bottom: 5px;">⚠️ 最差时段</div>
+                                    <div style="font-size: 16px; font-weight: bold; color: #991b1b;">
+                                        ${data.worstSlot}
+                                    </div>
+                                    <div style="font-size: 13px; color: #ef4444; margin-top: 3px;">
+                                        ${formatCurrency(data.worstPnl)}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    html += `
+                        <div style="font-size: 13px; font-weight: bold; color: #333; margin-bottom: 10px;">
+                            🕐 24小时分时段统计
+                        </div>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                    `;
+                    
+                    for (const [slot, stats] of Object.entries(data.byTimeSlot)) {
+                        if (stats.count > 0) {
+                            const winRate = parseFloat(stats.winRate);
+                            const color = winRate >= 60 ? '#10b981' : winRate >= 40 ? '#f59e0b' : '#ef4444';
+                            html += `
+                                <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                                    <div style="flex: 1;">
+                                        <span style="font-size: 12px; font-weight: bold; color: #333;">${slot}</span>
+                                        <span style="font-size: 11px; color: #666; margin-left: 8px;">${stats.count}笔</span>
+                                    </div>
+                                    <div style="display: flex; gap: 15px; align-items: center;">
+                                        <span style="font-size: 12px; color: ${color}; font-weight: bold;">
+                                            ${stats.winRate}%
+                                        </span>
+                                        <span style="font-size: 12px; color: ${parseFloat(stats.totalPnl) >= 0 ? '#10b981' : '#ef4444'}; font-weight: bold;">
+                                            ${formatCurrency(stats.totalPnl)}
+                                        </span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    html += '</div>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">今日暂无交易数据</div>';
+                }
+            } catch (error) {
+                console.error('加载开仓时机分析失败:', error);
+                container.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
         }
 
     </script>
