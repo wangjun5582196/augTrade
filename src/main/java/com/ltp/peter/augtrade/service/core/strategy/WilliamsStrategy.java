@@ -60,7 +60,7 @@ public class WilliamsStrategy implements Strategy {
             if (williamsR < STRONG_OVERSOLD) {
                 // ✨ 趋势过滤：下跌趋势中不做多
                 if (emaTrend != null && emaTrend.isDownTrend()) {
-                    log.debug("[{}] Williams强烈超卖但处于下跌趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    log.debug("[{}] Williams强烈超卖但处于下跌趋势，观望 (Williams={})", STRATEGY_NAME, String.format("%.2f", williamsR));
                     return createHoldSignal(String.format("Williams强烈超卖但下跌趋势 (%.2f)", williamsR));
                 }
                 
@@ -78,7 +78,7 @@ public class WilliamsStrategy implements Strategy {
             if (williamsR < OVERSOLD) {
                 // ✨ 趋势过滤：下跌趋势中不做多
                 if (emaTrend != null && emaTrend.isDownTrend()) {
-                    log.debug("[{}] Williams超卖但处于下跌趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    log.debug("[{}] Williams超卖但处于下跌趋势，观望 (Williams={})", STRATEGY_NAME, String.format("%.2f", williamsR));
                     return createHoldSignal(String.format("Williams超卖但下跌趋势 (%.2f)", williamsR));
                 }
                 
@@ -96,7 +96,7 @@ public class WilliamsStrategy implements Strategy {
             if (williamsR > STRONG_OVERBOUGHT) {
                 // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
                 if (emaTrend != null && emaTrend.isUpTrend()) {
-                    log.debug("[{}] Williams强烈超买但处于上涨趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    log.debug("[{}] Williams强烈超买但处于上涨趋势，观望 (Williams={})", STRATEGY_NAME, String.format("%.2f", williamsR));
                     return createHoldSignal(String.format("Williams强烈超买但上涨趋势 (%.2f)", williamsR));
                 }
                 
@@ -114,7 +114,7 @@ public class WilliamsStrategy implements Strategy {
             if (williamsR > OVERBOUGHT) {
                 // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
                 if (emaTrend != null && emaTrend.isUpTrend()) {
-                    log.debug("[{}] Williams超买但处于上涨趋势，观望 (Williams={:.2f})", STRATEGY_NAME, williamsR);
+                    log.debug("[{}] Williams超买但处于上涨趋势，观望 (Williams={})", STRATEGY_NAME, String.format("%.2f", williamsR));
                     return createHoldSignal(String.format("Williams超买但上涨趋势 (%.2f)", williamsR));
                 }
                 

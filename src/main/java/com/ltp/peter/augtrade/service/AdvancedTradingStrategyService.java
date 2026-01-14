@@ -379,8 +379,8 @@ public class AdvancedTradingStrategyService {
             predictedSignal = "BUY";
             willTrade = true;
             log.info("==> 🚀 ML极强买入信号：AI超高置信度看涨");
-            log.info("    ML: {:.1f}% 看涨概率 | Williams: {} | 置信度: {:.0f}%", 
-                    mlPrediction * 100, williamsR, confidence * 100);
+            log.info("    ML: {}% 看涨概率 | Williams: {} | 置信度: {}%",
+                    String.format("%.1f", mlPrediction * 100), williamsR, String.format("%.0f", confidence * 100));
             
             // 记录预测
             mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
@@ -395,8 +395,8 @@ public class AdvancedTradingStrategyService {
             predictedSignal = "BUY";
             willTrade = true;
             log.info("==> 🚀 ML增强买入信号：AI确认 + Williams深度超卖");
-            log.info("    ML: {:.1f}% 看涨概率 | Williams: {} | 置信度: {:.0f}%", 
-                    mlPrediction * 100, williamsR, confidence * 100);
+            log.info("    ML: {}% 看涨概率 | Williams: {} | 置信度: {}%",
+                    String.format("%.1f", mlPrediction * 100), williamsR, String.format("%.0f", confidence * 100));
             
             // 记录预测
             mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
@@ -411,8 +411,8 @@ public class AdvancedTradingStrategyService {
             predictedSignal = "SELL";
             willTrade = true;
             log.info("==> 📉 ML极强卖出信号：AI超高置信度看跌");
-            log.info("    ML: {:.1f}% 看跌概率 | Williams: {} | 置信度: {:.0f}%", 
-                    (1 - mlPrediction) * 100, williamsR, confidence * 100);
+            log.info("    ML: {}% 看跌概率 | Williams: {} | 置信度: {}%",
+                    String.format("%.1f", (1 - mlPrediction) * 100), williamsR, String.format("%.0f", confidence * 100));
             
             // 记录预测
             mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
@@ -427,8 +427,8 @@ public class AdvancedTradingStrategyService {
             predictedSignal = "SELL";
             willTrade = true;
             log.info("==> 📉 ML增强卖出信号：AI确认 + Williams深度超买");
-            log.info("    ML: {:.1f}% 看跌概率 | Williams: {} | 置信度: {:.0f}%", 
-                    (1 - mlPrediction) * 100, williamsR, confidence * 100);
+            log.info("    ML: {}% 看跌概率 | Williams: {} | 置信度: {}%",
+                    String.format("%.1f", (1 - mlPrediction) * 100), williamsR, String.format("%.0f", confidence * 100));
             
             // 记录预测
             mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
@@ -437,9 +437,9 @@ public class AdvancedTradingStrategyService {
             return Signal.SELL;
         }
         
-        // 记录HOLD预测（未触发交易）
-        mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), "HOLD",
-                BigDecimal.valueOf(confidence), williamsR, currentPrice, false, null);
+        // 🔥 修复：HOLD时不记录ML预测，只在开仓时记录
+        // mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), "HOLD",
+        //         BigDecimal.valueOf(confidence), williamsR, currentPrice, false, null);
         
         // 如果ML和Williams有冲突，输出警告
         if ((mlPrediction > 0.6 && williamsR.compareTo(BigDecimal.valueOf(-30)) > 0) ||

@@ -85,8 +85,8 @@ public class TrendFilterStrategy implements Strategy {
             
             if (emaDistancePercent < 0.15 && trendStrength < 30) {
                 // EMA距离<0.15%且趋势强度<30，判定为震荡市
-                log.info("[{}] ⚠️ 震荡市（EMA距离{:.2f}%, 强度{}），降低开仓", 
-                        STRATEGY_NAME, emaDistancePercent, trendStrength);
+                log.info("[{}] ⚠️ 震荡市（EMA距离{}%, 强度{}），降低开仓",
+                        STRATEGY_NAME, String.format("%.2f", emaDistancePercent), trendStrength);
                 return createHoldSignal(String.format("震荡市（EMA距离%.2f%%）", emaDistancePercent));
             }
             

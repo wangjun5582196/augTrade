@@ -85,8 +85,8 @@ public class RangingMarketStrategy implements Strategy {
             double pricePosition = (price - lowerBand) / bandRange;
             double pricePositionPercent = pricePosition * 100;
             
-            log.info("[{}] 价格位置: {:.1f}% (0%=下轨, 50%=中轨, 100%=上轨), Williams: {}", 
-                    STRATEGY_NAME, pricePositionPercent, 
+            log.info("[{}] 价格位置: {}% (0%=下轨, 50%=中轨, 100%=上轨), Williams: {}", 
+                    STRATEGY_NAME, String.format("%.1f", pricePositionPercent), 
                     williamsR != null ? String.format("%.1f", williamsR) : "N/A");
             
             // 3. 震荡市做多信号：低买（价格触及下轨 + 超卖）

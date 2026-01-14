@@ -65,7 +65,7 @@ public class RSIStrategy implements Strategy {
             if (rsi < EXTREME_OVERSOLD) {
                 // ✨ 趋势过滤：下跌趋势中不做多
                 if (emaTrend != null && emaTrend.isDownTrend()) {
-                    log.debug("[{}] RSI极度超卖但处于下跌趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    log.debug("[{}] RSI极度超卖但处于下跌趋势，观望 (RSI={})", STRATEGY_NAME, String.format("%.2f", rsi));
                     return createHoldSignal(String.format("RSI极度超卖但下跌趋势 (%.2f)", rsi));
                 }
                 
@@ -83,7 +83,7 @@ public class RSIStrategy implements Strategy {
             if (rsi < OVERSOLD) {
                 // ✨ 趋势过滤：下跌趋势中不做多
                 if (emaTrend != null && emaTrend.isDownTrend()) {
-                    log.debug("[{}] RSI超卖但处于下跌趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    log.debug("[{}] RSI超卖但处于下跌趋势，观望 (RSI={})", STRATEGY_NAME, String.format("%.2f", rsi));
                     return createHoldSignal(String.format("RSI超卖但下跌趋势 (%.2f)", rsi));
                 }
                 
@@ -101,7 +101,7 @@ public class RSIStrategy implements Strategy {
             if (rsi > EXTREME_OVERBOUGHT) {
                 // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
                 if (emaTrend != null && emaTrend.isUpTrend()) {
-                    log.debug("[{}] RSI极度超买但处于上涨趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    log.debug("[{}] RSI极度超买但处于上涨趋势，观望 (RSI={})", STRATEGY_NAME, String.format("%.2f", rsi));
                     return createHoldSignal(String.format("RSI极度超买但上涨趋势 (%.2f)", rsi));
                 }
                 
@@ -119,7 +119,7 @@ public class RSIStrategy implements Strategy {
             if (rsi > OVERBOUGHT) {
                 // ✨ 趋势过滤：上涨趋势中不做空（关键修复！）
                 if (emaTrend != null && emaTrend.isUpTrend()) {
-                    log.debug("[{}] RSI超买但处于上涨趋势，观望 (RSI={:.2f})", STRATEGY_NAME, rsi);
+                    log.debug("[{}] RSI超买但处于上涨趋势，观望 (RSI={})", STRATEGY_NAME, String.format("%.2f", rsi));
                     return createHoldSignal(String.format("RSI超买但上涨趋势 (%.2f)", rsi));
                 }
                 
