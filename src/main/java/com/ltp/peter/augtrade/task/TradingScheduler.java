@@ -816,7 +816,7 @@ public class TradingScheduler {
                 log.info("✅ 策略表现良好！胜率{}%，累计盈利${}", String.format("%.1f", winRate), String.format("%.2f", totalProfit));
                 log.info("💡 建议：可以考虑启用真实交易（先小资金测试）");
             } else if (winRate >= 50 && totalProfit > 0) {
-                log.info("⚠️  策略表现一般，胜率{:.1f}%，建议继续观察", winRate);
+                log.info("⚠️  策略表现一般，胜率{}%，建议继续观察", String.format("%.1f", winRate));
             } else {
                 log.info("❌ 策略表现不佳，胜率{}%，亏损${}", String.format("%.1f", winRate), String.format("%.2f", Math.abs(totalProfit)));
                 log.info("💡 建议：优化策略参数或更换策略");
@@ -1052,13 +1052,13 @@ public class TradingScheduler {
             double adxValue = adx.doubleValue();
             
             if (adxValue > 30) {
-                log.info("📊 市场状态: 强趋势 (ADX={:.1f} > 30)", adxValue);
+                log.info("📊 市场状态: 强趋势 (ADX={} > 30)", String.format("%.1f", adxValue));
                 return MarketRegime.STRONG_TREND;
             } else if (adxValue >= 20) {
-                log.info("📊 市场状态: 弱趋势 (ADX={:.1f}, 20-30)", adxValue);
+                log.info("📊 市场状态: 弱趋势 (ADX={}, 20-30)", String.format("%.1f", adxValue));
                 return MarketRegime.WEAK_TREND;
             } else {
-                log.warn("📊 市场状态: 震荡市 (ADX={:.1f} < 20) ⚠️ EMA信号不可靠", adxValue);
+                log.warn("📊 市场状态: 震荡市 (ADX={} < 20) ⚠️ EMA信号不可靠", String.format("%.1f", adxValue));
                 return MarketRegime.RANGING;
             }
             
