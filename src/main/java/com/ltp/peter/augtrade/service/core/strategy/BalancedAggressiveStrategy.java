@@ -37,9 +37,9 @@ public class BalancedAggressiveStrategy implements Strategy {
     private static final String STRATEGY_NAME = "BalancedAggressive";
     private static final int STRATEGY_WEIGHT = 7;
     
-    // 默认评分阈值
-    private static final int DEFAULT_SCORE_THRESHOLD = 5;
-    private static final int CHOPPY_MARKET_THRESHOLD = 7;
+    // 🔥 P0修复: 提高评分阈值,过滤低质量信号
+    private static final int DEFAULT_SCORE_THRESHOLD = 7;  // 从5提高到7
+    private static final int CHOPPY_MARKET_THRESHOLD = 9;  // 从7提高到9
     
     @Autowired
     private RSICalculator rsiCalculator;
@@ -70,15 +70,18 @@ public class BalancedAggressiveStrategy implements Strategy {
         }
         
         try {
-            // 计算所有指标 - 🔥 已删除RSI(与Williams重复)
+            // 🔥 P0修复: 计算所有指标(包括ADX趋势方向)
             Double williamsR = williamsCalculator.calculate(context.getKlines());
-            Double adx = adxCalculator.calculate(context.getKlines());
+            ADXCalculator.ADXResult adxResult = adxCalculator.calculateWithDirection(context.getKlines());
             CandlePattern pattern = candlePatternAnalyzer.calculate(context.getKlines());
             
-            if (williamsR == null || adx == null) {
+            if (williamsR == null || adxResult == null) {
                 log.warn("[{}] 指标计算失败", STRATEGY_NAME);
                 return createHoldSignal("指标计算失败", 0, 0);
             }
+            
+            double adx = adxResult.getAdx();
+            ADXCalculator.TrendDirection trendDirection = adxResult.getTrendDirection();
             
             // ML预测（可选）
             double mlPrediction = 0.5;
@@ -100,39 +103,78 @@ public class BalancedAggressiveStrategy implements Strategy {
                 momentum = currentPrice.subtract(price5);
             }
             
-            log.debug("[{}] Williams: {}, ADX: {}, ML: {}, 动量: {}, K线形态: {}", 
-                    STRATEGY_NAME, williamsR, adx, String.format("%.2f", mlPrediction), momentum, 
+            log.debug("[{}] Williams: {}, ADX: {} (趋势:{}), ML: {}, 动量: {}, K线形态: {}", 
+                    STRATEGY_NAME, williamsR, adx, trendDirection, String.format("%.2f", mlPrediction), momentum, 
                     pattern.hasPattern() ? pattern.getType() : "无");
             
             // 评分系统
             int buyScore = 0;
             int sellScore = 0;
             
-            // 确定评分阈值（根据ADX调整）
+            // 🔥 P0修复: 确定评分阈值（根据ADX动态调整）
             int requiredScore = DEFAULT_SCORE_THRESHOLD;
-            if (adx < 20) {
+            if (adx < 15) {
+                // 🔥 P0修复: 极弱趋势(ADX<15)完全禁止交易
+                log.warn("[{}] ADX={} < 15, 极弱趋势市场,禁止交易", STRATEGY_NAME, adx);
+                return createHoldSignal(String.format("极弱趋势市场禁止交易(ADX=%.1f)", adx), buyScore, sellScore);
+            } else if (adx < 20) {
                 // 震荡市场：提高门槛
                 requiredScore = CHOPPY_MARKET_THRESHOLD;
                 log.debug("[{}] ADX={}, 震荡市场，提高评分要求至{}分", STRATEGY_NAME, adx, requiredScore);
             } else if (adx > 30) {
-                // 强趋势市场：趋势确认加分
-                if (momentum.compareTo(BigDecimal.ZERO) > 0) {
-                    buyScore += 2;
-                    log.debug("[{}] ADX={}, 强趋势 + 上涨动量 → +2分", STRATEGY_NAME, adx);
-                } else if (momentum.compareTo(BigDecimal.ZERO) < 0) {
-                    sellScore += 2;
-                    log.debug("[{}] ADX={}, 强趋势 + 下跌动量 → +2分", STRATEGY_NAME, adx);
+                // 🔥 P0修复: 强趋势市场，根据趋势方向加分
+                if (trendDirection == ADXCalculator.TrendDirection.UP) {
+                    buyScore += 3;  // 上升趋势，做多加分
+                    log.debug("[{}] ADX={}, 强上升趋势 → 做多+3分", STRATEGY_NAME, adx);
+                } else if (trendDirection == ADXCalculator.TrendDirection.DOWN) {
+                    sellScore += 3;  // 下降趋势，做空加分
+                    log.debug("[{}] ADX={}, 强下降趋势 → 做空+3分", STRATEGY_NAME, adx);
+                } else {
+                    // 中性趋势，根据动量加分
+                    if (momentum.compareTo(BigDecimal.ZERO) > 0) {
+                        buyScore += 1;
+                        log.debug("[{}] ADX={}, 中性趋势 + 上涨动量 → +1分", STRATEGY_NAME, adx);
+                    } else if (momentum.compareTo(BigDecimal.ZERO) < 0) {
+                        sellScore += 1;
+                        log.debug("[{}] ADX={}, 中性趋势 + 下跌动量 → +1分", STRATEGY_NAME, adx);
+                    }
                 }
             }
             
-            // Williams评分（权重5）- 🔥 从3提高到5,因为删除了RSI
-            if (williamsR < -60) {
+            // 🔥 P0修复: 趋势方向过滤 - 禁止逆势交易
+            if (adx > 20) {  // 只在有明确趋势时过滤
+                if (trendDirection == ADXCalculator.TrendDirection.DOWN) {
+                    // 下降趋势，禁止做多
+                    log.warn("[{}] ⛔ 下降趋势市场(ADX={}, +DI<-DI),禁止做多", STRATEGY_NAME, adx);
+                    // 清空做多分数，强制做空或观望
+                    buyScore = 0;
+                } else if (trendDirection == ADXCalculator.TrendDirection.UP) {
+                    // 上升趋势，禁止做空(或提高做空门槛)
+                    log.info("[{}] 📈 上升趋势市场(ADX={}, +DI>-DI),做空需要更高评分", STRATEGY_NAME, adx);
+                    // 做空需要额外3分才能触发
+                    requiredScore = (buyScore > 0) ? requiredScore : requiredScore + 3;
+                }
+            }
+            
+            // 🔥 P0修复: Williams评分（权重5）- 严格过滤,避免高点追多/低点追空
+            if (williamsR < -70) {
+                // 深度超卖,安全做多
                 buyScore += 5;
-                log.debug("[{}] Williams超卖 ({}) → +5分", STRATEGY_NAME, williamsR);
-            } else if (williamsR > -40) {
+                log.debug("[{}] Williams深度超卖 ({}) → +5分", STRATEGY_NAME, williamsR);
+            } else if (williamsR < -60) {
+                // 中度超卖,适度做多
+                buyScore += 3;
+                log.debug("[{}] Williams中度超卖 ({}) → +3分", STRATEGY_NAME, williamsR);
+            } else if (williamsR > -30) {
+                // 超买,可以做空
                 sellScore += 5;
                 log.debug("[{}] Williams超买 ({}) → +5分", STRATEGY_NAME, williamsR);
+            } else if (williamsR > -40) {
+                // 轻度超买
+                sellScore += 3;
+                log.debug("[{}] Williams轻度超买 ({}) → +3分", STRATEGY_NAME, williamsR);
             }
+            // 🔥 P0修复: Williams在-40到-60之间属于中性区,不给分
             
             // RSI评分 - 🔥 已删除: 与Williams重复,删除后Williams权重从3提高到5
             // if (rsi < 45) {

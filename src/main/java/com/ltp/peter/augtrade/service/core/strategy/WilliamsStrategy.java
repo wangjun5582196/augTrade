@@ -25,10 +25,10 @@ public class WilliamsStrategy implements Strategy {
     private static final String STRATEGY_NAME = "Williams";
     private static final int STRATEGY_WEIGHT = 8;
     
-    // Williams %R 阈值
-    private static final double STRONG_OVERSOLD = -80.0;
-    private static final double OVERSOLD = -60.0;
-    private static final double OVERBOUGHT = -40.0;
+    // 🔥 P0修复: Williams %R 阈值 - 严格化,避免高点追多
+    private static final double STRONG_OVERSOLD = -85.0;  // 从-80提高到-85,更严格
+    private static final double OVERSOLD = -70.0;         // 从-60提高到-70,避免假超卖
+    private static final double OVERBOUGHT = -35.0;       // 从-40收紧到-35
     private static final double STRONG_OVERBOUGHT = -20.0;
     
     @Autowired

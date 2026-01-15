@@ -88,7 +88,7 @@ bybit:
     
     # ATR动态模式参数（mode=atr时使用）
     atr-stop-loss-multiplier: 2.0           # 🔥 P0修复-20260114：从3.0降到2.0，控制单笔最大亏损在50 USD内
-    atr-take-profit-multiplier: 3.0         # 🔥 P1修复：从3.5降到3.0，更容易触发止盈
+    atr-take-profit-multiplier: 2.0         # 🔥 P0修复-20260115：从3.0降到2.0，更容易触发止盈
     atr-period: 14                          # ATR计算周期
     atr-min-threshold: 2.5                  # 🔥 P0修复：从2.0提高到2.5，过滤低波动期
     atr-max-threshold: 8.0                  # 🔥 P1修复：从15.0降到8.0，高波动期减少交易
@@ -113,9 +113,9 @@ trading:
     # 移动止损配置（利润最大化）🚀
     trailing-stop:
       enabled: true              # ✅ 启用移动止损
-      trigger-profit: 20.0       # 🔥 P1修复：从30降到20，更早触发保护利润
-      distance: 15.0             # 🔥 P1修复：从10增到15，避免回调被打掉
-      lock-profit-percent: 80.0  # 🔥 P1修复：从70%提高到80%，锁定更多利润
+      trigger-profit: 10.0       # 🔥 P0修复-20260115：从20降到10，更早触发保护利润
+      distance: 8.0              # 🔥 P0修复-20260115：从15降到8，跟踪更紧密
+      lock-profit-percent: 60.0  # 🔥 P0修复-20260115：从80%降到60%，更易触发
     
   # 策略配置
   strategy:

@@ -95,11 +95,24 @@ public class CompositeStrategy implements Strategy {
             
             log.info("[{}] 综合评分 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
             
-            // 🔥 P0修复: 先检查WEAK_TREND市场
+            // 🔥 P0修复: 震荡市和弱趋势市场过滤
             Double adx = context.getIndicator("ADX");
-            if (adx != null && adx >= 15 && adx < 28) {
-                log.warn("[{}] ⏸️ WEAK_TREND市场(ADX={}),暂停交易", STRATEGY_NAME, String.format("%.2f", adx));
-                return createHoldSignal(String.format("弱趋势市场不交易(ADX=%.2f)", adx), buyScore, sellScore);
+            if (adx != null) {
+                if (adx < 15) {
+                    // 极弱趋势(ADX<15): 完全禁止交易
+                    log.warn("[{}] ⛔ 极弱趋势市场(ADX={}),完全禁止交易", STRATEGY_NAME, String.format("%.2f", adx));
+                    return createHoldSignal(String.format("极弱趋势禁止交易(ADX=%.2f)", adx), buyScore, sellScore);
+                } else if (adx >= 15 && adx < 25) {
+                    // 弱趋势(ADX 15-25): 提高阈值到20分以上
+                    int weakTrendThreshold = 20;
+                    if (buyScore < weakTrendThreshold && sellScore < weakTrendThreshold) {
+                        log.warn("[{}] ⏸️ 弱趋势市场(ADX={}),信号强度不足(需要{}分)", 
+                                STRATEGY_NAME, String.format("%.2f", adx), weakTrendThreshold);
+                        return createHoldSignal(String.format("弱趋势需要更强信号(ADX=%.2f, 需要%d分)", adx, weakTrendThreshold), buyScore, sellScore);
+                    }
+                    log.info("[{}] ⚡ 弱趋势市场(ADX={}),但信号足够强(做多:{}, 做空:{})", 
+                            STRATEGY_NAME, String.format("%.2f", adx), buyScore, sellScore);
+                }
             }
             
             // 根据得分生成信号

@@ -121,6 +121,11 @@ public class TradingScheduler {
     private LocalDateTime lastCloseTime = null;
     private static final int CLOSE_COOLDOWN_SECONDS = 300; // 300秒冷却（5分钟）- 防止止损后立即开仓
     
+    // 🔥 P0修复-20260115: 每日交易次数限制
+    private static final int MAX_DAILY_TRADES = 50;  // 每日最大8笔交易
+    private LocalDateTime dailyTradeResetTime = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
+    private int dailyTradeCount = 0;
+    
     // 持仓时间管理常量 - ✨ 优化：增加持仓保护期，避免过早平仓
     private static final int MAX_HOLDING_SECONDS = 1800; // 最大持仓30分钟
     private static final int MIN_HOLDING_SECONDS_DEFAULT = 600; // 默认10分钟（从5分钟增加）
@@ -213,6 +218,25 @@ public class TradingScheduler {
             log.info("📊 新架构信号: {} (强度: {}, 得分: {}) - {}", 
                     tradingSignal.getType(), tradingSignal.getStrength(), 
                     tradingSignal.getScore(), tradingSignal.getReason());
+            
+            // 🔥 P0修复-20260115: 检查每日交易次数限制
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime todayStart = now.withHour(0).withMinute(0).withSecond(0);
+            
+            // 如果是新的一天,重置计数器
+            if (dailyTradeResetTime.isBefore(todayStart)) {
+                log.info("📅 新的一天开始,重置每日交易计数器");
+                dailyTradeCount = 0;
+                dailyTradeResetTime = todayStart;
+            }
+            
+            // 检查是否超过每日交易限制
+            if (dailyTradeCount >= MAX_DAILY_TRADES) {
+                log.warn("⛔ 今日交易次数已达上限({}/{}),暂停交易直到明天", 
+                        dailyTradeCount, MAX_DAILY_TRADES);
+                log.info("========================================");
+                return;
+            }
             
             // 3. 检查冷却期（包括止损/止盈/信号反转的冷却）
             if (lastCloseTime != null) {
@@ -393,6 +417,9 @@ public class TradingScheduler {
                     log.info("🔥 收到高质量做多信号（强度{}，市场：{}）！准备做多黄金", 
                             tradingSignal.getStrength(), regime);
                     executeBybitBuy(currentPrice);
+                    // 🔥 P0修复: 开仓成功后增加计数
+                    dailyTradeCount++;
+                    log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
                 // 🔥 P0修复：提高做空门槛（而非完全禁用）
@@ -406,6 +433,9 @@ public class TradingScheduler {
                     log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
                             tradingSignal.getStrength(), shortRequiredStrength, regime);
                     executeBybitSell(currentPrice);
+                    // 🔥 P0修复: 开仓成功后增加计数
+                    dailyTradeCount++;
+                    log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
                 }
             } else {
                 log.debug("⏸️ 保持观望，等待高质量信号（市场状态：{}）", regime);

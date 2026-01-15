@@ -1,6 +1,8 @@
 package com.ltp.peter.augtrade.service.core.indicator;
 
 import com.ltp.peter.augtrade.entity.Kline;
+import lombok.AllArgsConstructor;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -15,11 +17,64 @@ import java.util.List;
  * - ADX < 20: 震荡市场，适合区间交易策略
  * - ADX 20-25: 过渡区域
  * 
+ * 🔥 P0修复-20260115: 增加+DI/-DI计算，判断趋势方向
+ * - +DI > -DI: 上升趋势
+ * - +DI < -DI: 下降趋势
+ * 
  * @author Peter Wang
  */
 @Slf4j
 @Component
 public class ADXCalculator implements TechnicalIndicator<Double> {
+    
+    /**
+     * 🔥 P0修复: ADX结果类，包含ADX值、+DI、-DI和趋势方向
+     */
+    @Data
+    @AllArgsConstructor
+    public static class ADXResult {
+        private double adx;        // ADX值
+        private double plusDI;     // +DI值
+        private double minusDI;    // -DI值
+        private TrendDirection trendDirection;  // 趋势方向
+        
+        /**
+         * 判断是否为上升趋势
+         */
+        public boolean isUpTrend() {
+            return trendDirection == TrendDirection.UP;
+        }
+        
+        /**
+         * 判断是否为下降趋势
+         */
+        public boolean isDownTrend() {
+            return trendDirection == TrendDirection.DOWN;
+        }
+        
+        /**
+         * 判断是否为强上升趋势
+         */
+        public boolean isStrongUpTrend() {
+            return adx > 25 && trendDirection == TrendDirection.UP;
+        }
+        
+        /**
+         * 判断是否为强下降趋势
+         */
+        public boolean isStrongDownTrend() {
+            return adx > 25 && trendDirection == TrendDirection.DOWN;
+        }
+    }
+    
+    /**
+     * 趋势方向枚举
+     */
+    public enum TrendDirection {
+        UP,      // 上升趋势 (+DI > -DI)
+        DOWN,    // 下降趋势 (+DI < -DI)
+        NEUTRAL  // 中性 (+DI ≈ -DI)
+    }
     
     private static final int DEFAULT_PERIOD = 14;
     private final int period;
@@ -34,6 +89,14 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
     
     @Override
     public Double calculate(List<Kline> klines) {
+        ADXResult result = calculateWithDirection(klines);
+        return result != null ? result.getAdx() : null;
+    }
+    
+    /**
+     * 🔥 P0修复: 计算ADX并返回完整结果(包含+DI/-DI和趋势方向)
+     */
+    public ADXResult calculateWithDirection(List<Kline> klines) {
         if (!hasEnoughData(klines)) {
             log.warn("K线数据不足，需要至少 {} 根K线，当前只有 {} 根", getRequiredPeriods(), klines.size());
             return null;
@@ -74,7 +137,7 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
             
             if (smoothedTR == 0) {
                 log.warn("平滑后的真实波幅为0，无法计算ADX");
-                return 0.0;
+                return new ADXResult(0.0, 0.0, 0.0, TrendDirection.NEUTRAL);
             }
             
             // 计算+DI和-DI (Directional Indicators)
@@ -86,15 +149,36 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
             double diSum = plusDI + minusDI;
             
             if (diSum == 0) {
-                return 0.0;
+                return new ADXResult(0.0, plusDI, minusDI, TrendDirection.NEUTRAL);
             }
             
             double dx = (diDiff / diSum) * 100;
             
+            // 🔥 P0修复: 判断趋势方向
+            TrendDirection direction;
+            double diDiffPercent = Math.abs(plusDI - minusDI) / Math.max(plusDI, minusDI) * 100;
+            
+            if (plusDI > minusDI && diDiffPercent > 10) {
+                // +DI明显大于-DI (差距>10%)，上升趋势
+                direction = TrendDirection.UP;
+            } else if (minusDI > plusDI && diDiffPercent > 10) {
+                // -DI明显大于+DI (差距>10%)，下降趋势
+                direction = TrendDirection.DOWN;
+            } else {
+                // 两者接近，中性
+                direction = TrendDirection.NEUTRAL;
+            }
+            
+            log.debug("[ADX] ADX={}, +DI={}, -DI={}, 趋势={}", 
+                     String.format("%.2f", dx),
+                     String.format("%.2f", plusDI),
+                     String.format("%.2f", minusDI),
+                     direction);
+            
             // ADX是DX的移动平均
             // 简化版本：直接返回DX作为ADX的近似值
             // 完整版本需要对DX序列进行移动平均
-            return dx;
+            return new ADXResult(dx, plusDI, minusDI, direction);
             
         } catch (Exception e) {
             log.error("计算ADX时发生错误", e);
