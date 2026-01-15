@@ -382,9 +382,9 @@ public class AdvancedTradingStrategyService {
             log.info("    ML: {}% 看涨概率 | Williams: {} | 置信度: {}%",
                     String.format("%.1f", mlPrediction * 100), williamsR, String.format("%.0f", confidence * 100));
             
-            // 记录预测
-            mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
-                    BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
+            // 🔥 修复：不在信号生成时记录ML，应该在实际开仓成功后记录
+            // mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
+            //         BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
             
             return Signal.BUY;
         }
@@ -398,9 +398,9 @@ public class AdvancedTradingStrategyService {
             log.info("    ML: {}% 看涨概率 | Williams: {} | 置信度: {}%",
                     String.format("%.1f", mlPrediction * 100), williamsR, String.format("%.0f", confidence * 100));
             
-            // 记录预测
-            mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
-                    BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
+            // 🔥 修复：不在信号生成时记录ML，应该在实际开仓成功后记录
+            // mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
+            //         BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
             
             return Signal.BUY;
         }
@@ -414,9 +414,9 @@ public class AdvancedTradingStrategyService {
             log.info("    ML: {}% 看跌概率 | Williams: {} | 置信度: {}%",
                     String.format("%.1f", (1 - mlPrediction) * 100), williamsR, String.format("%.0f", confidence * 100));
             
-            // 记录预测
-            mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
-                    BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
+            // 🔥 修复：不在信号生成时记录ML，应该在实际开仓成功后记录
+            // mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
+            //         BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
             
             return Signal.SELL;
         }
@@ -430,9 +430,9 @@ public class AdvancedTradingStrategyService {
             log.info("    ML: {}% 看跌概率 | Williams: {} | 置信度: {}%",
                     String.format("%.1f", (1 - mlPrediction) * 100), williamsR, String.format("%.0f", confidence * 100));
             
-            // 记录预测
-            mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
-                    BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
+            // 🔥 修复：不在信号生成时记录ML，应该在实际开仓成功后记录
+            // mlRecordService.recordPrediction(symbol, BigDecimal.valueOf(mlPrediction), predictedSignal,
+            //         BigDecimal.valueOf(confidence), williamsR, currentPrice, willTrade, null);
             
             return Signal.SELL;
         }

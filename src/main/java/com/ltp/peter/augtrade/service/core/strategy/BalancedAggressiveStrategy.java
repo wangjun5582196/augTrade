@@ -189,9 +189,9 @@ public class BalancedAggressiveStrategy implements Strategy {
                         String.format("均衡激进策略做多 (评分:%d, Williams:%.1f)", 
                                 buyScore, williamsR);
                 
-                // ✨ 记录ML预测（买入信号）
-                recordMLPrediction(context.getSymbol(), mlPrediction, "BUY", mlConfidence, 
-                                   williamsR, context.getCurrentPrice(), true);
+                // 🔥 修复：不在这里记录ML，应该在实际开仓时记录
+                // recordMLPrediction(context.getSymbol(), mlPrediction, "BUY", mlConfidence, 
+                //                    williamsR, context.getCurrentPrice(), true);
                 
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
@@ -212,9 +212,9 @@ public class BalancedAggressiveStrategy implements Strategy {
                         String.format("均衡激进策略做空 (评分:%d, Williams:%.1f)", 
                                 sellScore, williamsR);
                 
-                // ✨ 记录ML预测（卖出信号）
-                recordMLPrediction(context.getSymbol(), mlPrediction, "SELL", mlConfidence, 
-                                   williamsR, context.getCurrentPrice(), true);
+                // 🔥 修复：不在这里记录ML，应该在实际开仓时记录
+                // recordMLPrediction(context.getSymbol(), mlPrediction, "SELL", mlConfidence, 
+                //                    williamsR, context.getCurrentPrice(), true);
                 
                 return TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
@@ -288,28 +288,31 @@ public class BalancedAggressiveStrategy implements Strategy {
     
     /**
      * ✨ 新增：记录ML预测到数据库
+     * 🔥 注意：此方法已弃用，应该在实际开仓时才记录ML预测
      */
+    @Deprecated
     private void recordMLPrediction(String symbol, double mlPrediction, String predictedSignal,
                                     double confidence, double williamsR, BigDecimal currentPrice,
                                     boolean tradeTaken) {
-        if (mlRecordService != null) {
-            try {
-                mlRecordService.recordPrediction(
-                    symbol,
-                    BigDecimal.valueOf(mlPrediction),
-                    predictedSignal,
-                    BigDecimal.valueOf(confidence),
-                    BigDecimal.valueOf(williamsR),
-                    currentPrice,
-                    tradeTaken,
-                    null  // orderNo在开仓时才有，这里先传null
-                );
-                log.debug("[{}] ✅ ML预测已记录: 信号={}, 预测值={}, 置信度={}, 是否交易={}", 
-                         STRATEGY_NAME, predictedSignal, String.format("%.2f", mlPrediction), 
-                         String.format("%.2f", confidence), tradeTaken);
-            } catch (Exception e) {
-                log.warn("[{}] ⚠️ ML预测记录失败", STRATEGY_NAME, e);
-            }
-        }
+        // 🔥 已禁用：不应该在信号生成时记录，应该在实际开仓时记录
+        // if (mlRecordService != null) {
+        //     try {
+        //         mlRecordService.recordPrediction(
+        //             symbol,
+        //             BigDecimal.valueOf(mlPrediction),
+        //             predictedSignal,
+        //             BigDecimal.valueOf(confidence),
+        //             BigDecimal.valueOf(williamsR),
+        //             currentPrice,
+        //             tradeTaken,
+        //             null  // orderNo在开仓时才有，这里先传null
+        //         );
+        //         log.debug("[{}] ✅ ML预测已记录: 信号={}, 预测值={}, 置信度={}, 是否交易={}", 
+        //                  STRATEGY_NAME, predictedSignal, String.format("%.2f", mlPrediction), 
+        //                  String.format("%.2f", confidence), tradeTaken);
+        //     } catch (Exception e) {
+        //         log.warn("[{}] ⚠️ ML预测记录失败", STRATEGY_NAME, e);
+        //     }
+        // }
     }
 }
