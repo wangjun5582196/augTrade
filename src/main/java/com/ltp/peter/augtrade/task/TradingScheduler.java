@@ -1059,36 +1059,35 @@ public class TradingScheduler {
     
     /**
      * 🔥 P0修复：检测市场状态
-     * 使用ADX指标识别趋势市和震荡市
+     * 使用与StrategyOrchestrator一致的ADX计算方法
      */
     private MarketRegime detectMarketRegime(String symbol) {
         try {
-            // 获取最近的K线数据
-            java.util.List<Kline> klines = marketDataService.getLatestKlines(symbol, "5m", 50);
+            // 🔥 修复：从MarketContext获取ADX，确保与StrategyOrchestrator一致
+            com.ltp.peter.augtrade.service.core.strategy.MarketContext context = 
+                    strategyOrchestrator.getMarketContext(symbol, 100);
             
-            if (klines == null || klines.size() < 15) {
-                log.warn("⚠️ K线数据不足，默认为弱趋势");
+            if (context == null) {
+                log.warn("⚠️ 无法获取市场上下文，默认为弱趋势");
                 return MarketRegime.WEAK_TREND;
             }
             
-            // 计算ADX
-            BigDecimal adx = indicatorService.calculateADX(klines, 14);
+            // 从context获取ADX（与StrategyOrchestrator使用同一份数据）
+            Double adxValue = context.getIndicator("ADX");
             
-            if (adx == null) {
+            if (adxValue == null) {
                 log.warn("⚠️ ADX计算失败，默认为弱趋势");
                 return MarketRegime.WEAK_TREND;
             }
             
-            double adxValue = adx.doubleValue();
-            
             if (adxValue > 30) {
                 log.info("📊 市场状态: 强趋势 (ADX={} > 30)", String.format("%.1f", adxValue));
                 return MarketRegime.STRONG_TREND;
-            } else if (adxValue >= 20) {
-                log.info("📊 市场状态: 弱趋势 (ADX={}, 20-30)", String.format("%.1f", adxValue));
+            } else if (adxValue >= 15) {
+                log.info("📊 市场状态: 弱趋势 (ADX={}, 15-30)", String.format("%.1f", adxValue));
                 return MarketRegime.WEAK_TREND;
             } else {
-                log.warn("📊 市场状态: 震荡市 (ADX={} < 20) ⚠️ EMA信号不可靠", String.format("%.1f", adxValue));
+                log.warn("📊 市场状态: 极弱震荡 (ADX={} < 15) ⚠️ 高风险市场", String.format("%.1f", adxValue));
                 return MarketRegime.RANGING;
             }
             
@@ -1116,9 +1115,9 @@ public class TradingScheduler {
                 baseStrength = 30;
                 break;
             case RANGING:
-                // 震荡市，较高门槛（从85→50），但不要过高避免错过机会
-                baseStrength = 50;
-                log.warn("⚠️ 震荡市检测！提高开仓门槛至{}，避免虚假信号", baseStrength);
+                // 极弱震荡市，提高门槛（从85→40），但不要过高
+                baseStrength = 40;
+                log.warn("⚠️ 极弱震荡检测！提高开仓门槛至{}，避免虚假信号", baseStrength);
                 break;
             default:
                 baseStrength = 30;
