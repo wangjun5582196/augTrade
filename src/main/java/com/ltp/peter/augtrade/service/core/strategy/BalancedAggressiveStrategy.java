@@ -37,9 +37,9 @@ public class BalancedAggressiveStrategy implements Strategy {
     private static final String STRATEGY_NAME = "BalancedAggressive";
     private static final int STRATEGY_WEIGHT = 7;
     
-    // 🔥 P0修复: 提高评分阈值,过滤低质量信号
+    // 🔥 P0修复: 优化评分阈值,平衡交易频率与信号质量
     private static final int DEFAULT_SCORE_THRESHOLD = 7;  // 从5提高到7
-    private static final int CHOPPY_MARKET_THRESHOLD = 9;  // 从7提高到9
+    private static final int CHOPPY_MARKET_THRESHOLD = 7;  // 从9降低到7,避免过度过滤
     
     @Autowired
     private RSICalculator rsiCalculator;
@@ -111,16 +111,20 @@ public class BalancedAggressiveStrategy implements Strategy {
             int buyScore = 0;
             int sellScore = 0;
             
-            // 🔥 P0修复: 确定评分阈值（根据ADX动态调整）
+            // 🔥 P1修复: 渐进式评分阈值（避免临界值跳变）
             int requiredScore = DEFAULT_SCORE_THRESHOLD;
             if (adx < 15) {
-                // 🔥 P0修复: 极弱趋势(ADX<15)完全禁止交易
-                log.warn("[{}] ADX={} < 15, 极弱趋势市场,禁止交易", STRATEGY_NAME, adx);
-                return createHoldSignal(String.format("极弱趋势市场禁止交易(ADX=%.1f)", adx), buyScore, sellScore);
+                // 🔥 修复: 极弱趋势显著提高评分要求（而非完全禁止）
+                requiredScore = 12;  // 提高到12分（正常是7分）
+                log.debug("[{}] ADX={}, 极弱趋势，提高评分要求至{}分", STRATEGY_NAME, adx, requiredScore);
+            } else if (adx < 17) {
+                // 弱趋势初期（15-17）：适度提高门槛
+                requiredScore = 7;  // 使用默认阈值
+                log.debug("[{}] ADX={}, 弱趋势初期，评分要求{}分", STRATEGY_NAME, adx, requiredScore);
             } else if (adx < 20) {
-                // 震荡市场：提高门槛
-                requiredScore = CHOPPY_MARKET_THRESHOLD;
-                log.debug("[{}] ADX={}, 震荡市场，提高评分要求至{}分", STRATEGY_NAME, adx, requiredScore);
+                // 弱趋势后期（17-20）：进一步提高门槛
+                requiredScore = 8;  // 比默认高1分
+                log.debug("[{}] ADX={}, 弱趋势后期，提高评分要求至{}分", STRATEGY_NAME, adx, requiredScore);
             } else if (adx > 30) {
                 // 🔥 P0修复: 强趋势市场，根据趋势方向加分
                 if (trendDirection == ADXCalculator.TrendDirection.UP) {
@@ -141,26 +145,32 @@ public class BalancedAggressiveStrategy implements Strategy {
                 }
             }
             
-            // 🔥 P0修复: 趋势方向过滤 - 禁止逆势交易
-            if (adx > 20) {  // 只在有明确趋势时过滤
+            // 🔥 P1修复: 趋势方向过滤 - 降低惩罚力度（从+5降为+3）
+            if (adx > 25) {  // 提高到25，避免过早触发
                 if (trendDirection == ADXCalculator.TrendDirection.DOWN) {
-                    // 下降趋势，禁止做多
-                    log.warn("[{}] ⛔ 下降趋势市场(ADX={}, +DI<-DI),禁止做多", STRATEGY_NAME, adx);
-                    // 清空做多分数，强制做空或观望
-                    buyScore = 0;
+                    // 下降趋势，提高做多门槛（从+5降为+3）
+                    int originalRequired = requiredScore;
+                    requiredScore = requiredScore + 3;
+                    log.warn("[{}] ⚠️ 下降趋势市场(ADX={}, +DI<-DI),做多需要更高评分({}→{}分)", 
+                            STRATEGY_NAME, adx, originalRequired, requiredScore);
                 } else if (trendDirection == ADXCalculator.TrendDirection.UP) {
-                    // 上升趋势，禁止做空(或提高做空门槛)
-                    log.info("[{}] 📈 上升趋势市场(ADX={}, +DI>-DI),做空需要更高评分", STRATEGY_NAME, adx);
-                    // 做空需要额外3分才能触发
-                    requiredScore = (buyScore > 0) ? requiredScore : requiredScore + 3;
+                    // 上升趋势，提高做空门槛（从+5降为+3）
+                    int originalRequired = requiredScore;
+                    requiredScore = requiredScore + 3;
+                    log.info("[{}] 📈 上升趋势市场(ADX={}, +DI>-DI),做空需要更高评分({}→{}分)", 
+                            STRATEGY_NAME, adx, originalRequired, requiredScore);
                 }
             }
             
-            // 🔥 P0修复: Williams评分（权重5）- 严格过滤,避免高点追多/低点追空
+            // 🔥 P0修复: Williams评分（权重5）- 优化区间划分,提高超卖区域权重
             if (williamsR < -70) {
                 // 深度超卖,安全做多
                 buyScore += 5;
                 log.debug("[{}] Williams深度超卖 ({}) → +5分", STRATEGY_NAME, williamsR);
+            } else if (williamsR < -65) {
+                // 次深度超卖,较安全做多
+                buyScore += 4;
+                log.debug("[{}] Williams次深度超卖 ({}) → +4分", STRATEGY_NAME, williamsR);
             } else if (williamsR < -60) {
                 // 中度超卖,适度做多
                 buyScore += 3;
@@ -169,6 +179,10 @@ public class BalancedAggressiveStrategy implements Strategy {
                 // 超买,可以做空
                 sellScore += 5;
                 log.debug("[{}] Williams超买 ({}) → +5分", STRATEGY_NAME, williamsR);
+            } else if (williamsR > -35) {
+                // 次超买,较安全做空
+                sellScore += 4;
+                log.debug("[{}] Williams次超买 ({}) → +4分", STRATEGY_NAME, williamsR);
             } else if (williamsR > -40) {
                 // 轻度超买
                 sellScore += 3;
@@ -297,17 +311,18 @@ public class BalancedAggressiveStrategy implements Strategy {
     
     /**
      * 计算信号强度
+     * 🔥 修复：降低倍数，提高信号区分度
      * 
      * @param score 实际得分
      * @param threshold 门槛分数
      * @return 信号强度（0-100）
      */
     private int calculateSignalStrength(int score, int threshold) {
-        // 基础强度：超过门槛的分数 * 10
-        int baseStrength = (score - threshold) * 10;
+        // 基础强度：超过门槛的分数 * 5（从10降到5）
+        int baseStrength = (score - threshold) * 5;
         
-        // 额外强度：根据总分数
-        int bonusStrength = score * 5;
+        // 额外强度：根据总分数 * 3（从5降到3）
+        int bonusStrength = score * 3;
         
         int totalStrength = baseStrength + bonusStrength;
         
