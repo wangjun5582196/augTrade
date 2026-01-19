@@ -90,7 +90,7 @@ bybit:
     atr-stop-loss-multiplier: 2.0           # 🔥 P0修复-20260114：从3.0降到2.0，控制单笔最大亏损在50 USD内
     atr-take-profit-multiplier: 2.0         # 🔥 P0修复-20260115：从3.0降到2.0，更容易触发止盈
     atr-period: 14                          # ATR计算周期
-    atr-min-threshold: 2.5                  # 🔥 P0修复：从2.0提高到2.5，过滤低波动期
+    atr-min-threshold: 1.0                  # 🔥 P0修复-20260119：从2.5降到1.0，黄金正常波动范围（ATR通常1.0-3.0）
     atr-max-threshold: 8.0                  # 🔥 P1修复：从15.0降到8.0，高波动期减少交易
 
 # 交易平台配置
@@ -132,6 +132,11 @@ trading:
   binance:
     symbol: BTCUSDT   # 比特币交易对 ⚡
     interval: 1m      # K线周期: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+  
+  # 启动时数据加载配置
+  startup:
+    load-klines: true         # ✅ 启用启动时加载K线数据
+    klines-count: 200         # 加载最近200条K线（5分钟周期 = 约16.7小时的数据）
 
 # 飞书通知配置
 feishu:

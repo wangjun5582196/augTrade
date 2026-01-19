@@ -1,6 +1,7 @@
 package com.ltp.peter.augtrade.task;
 
 import com.ltp.peter.augtrade.entity.Kline;
+import com.ltp.peter.augtrade.entity.PaperPosition;
 import com.ltp.peter.augtrade.entity.TradeOrder;
 import com.ltp.peter.augtrade.mapper.TradeOrderMapper;
 import com.ltp.peter.augtrade.service.*;
@@ -139,6 +140,14 @@ public class TradingScheduler {
      */
     @Scheduled(fixedRate = 300000)
     public void collectMarketData() {
+        // 等待启动数据加载完成（最多等待30秒）
+        if (!com.ltp.peter.augtrade.service.StartupDataLoader.isDataLoaded()) {
+            if (!com.ltp.peter.augtrade.service.StartupDataLoader.awaitDataLoaded(30)) {
+                log.warn("⏸️ 等待启动数据加载超时，跳过本次数据采集");
+                return;
+            }
+        }
+        
         // 如果启用Bybit，采集Bybit黄金数据
         if (bybitEnabled && bybitTradingService.isEnabled()) {
             collectBybitData();
@@ -188,6 +197,15 @@ public class TradingScheduler {
     public void executeStrategy() {
         if (!strategyEnabled) {
             return;
+        }
+        
+        // 🔥 关键修复：等待启动数据加载完成后才开始交易
+        if (!com.ltp.peter.augtrade.service.StartupDataLoader.isDataLoaded()) {
+            if (!com.ltp.peter.augtrade.service.StartupDataLoader.awaitDataLoaded(60)) {
+                log.warn("⏸️ 启动数据尚未加载完成，暂停交易策略执行");
+                return;
+            }
+            log.info("✅ 启动数据已加载完成，开始执行交易策略");
         }
         
         // 如果启用Bybit，使用Bybit交易
@@ -416,10 +434,12 @@ public class TradingScheduler {
                 } else {
                     log.info("🔥 收到高质量做多信号（强度{}，市场：{}）！准备做多黄金", 
                             tradingSignal.getStrength(), regime);
-                    executeBybitBuy(currentPrice);
-                    // 🔥 P0修复: 开仓成功后增加计数
-                    dailyTradeCount++;
-                    log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    // 🔥 修复：只在开仓成功时才增加计数器
+                    boolean success = executeBybitBuy(currentPrice);
+                    if (success) {
+                        dailyTradeCount++;
+                        log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    }
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL) {
                 // 🔥 P0修复：提高做空门槛（而非完全禁用）
@@ -432,10 +452,12 @@ public class TradingScheduler {
                 } else {
                     log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
                             tradingSignal.getStrength(), shortRequiredStrength, regime);
-                    executeBybitSell(currentPrice);
-                    // 🔥 P0修复: 开仓成功后增加计数
-                    dailyTradeCount++;
-                    log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    // 🔥 修复：只在开仓成功时才增加计数器
+                    boolean success = executeBybitSell(currentPrice);
+                    if (success) {
+                        dailyTradeCount++;
+                        log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    }
                 }
             } else {
                 log.debug("⏸️ 保持观望，等待高质量信号（市场状态：{}）", regime);
@@ -451,8 +473,9 @@ public class TradingScheduler {
     
     /**
      * 通过Bybit做多黄金
+     * @return 是否成功开仓
      */
-    private void executeBybitBuy(BigDecimal currentPrice) {
+    private boolean executeBybitBuy(BigDecimal currentPrice) {
         try {
             // 计算止损止盈价格（支持固定和ATR动态模式）
             BigDecimal stopLoss;
@@ -465,7 +488,7 @@ public class TradingScheduler {
                     // 检查ATR波动率是否适合交易
                     if (!atrCalculator.isVolatilitySuitableForTrading(klines, atrMinThreshold, atrMaxThreshold)) {
                         log.warn("⚠️ 市场波动不适合交易，放弃开仓");
-                        return;
+                        return false;
                     }
                     
                     // 计算ATR动态止损止盈
@@ -499,7 +522,7 @@ public class TradingScheduler {
                 com.ltp.peter.augtrade.service.core.signal.TradingSignal signal = 
                         strategyOrchestrator.generateSignal(bybitSymbol);
                 
-                paperTradingService.openPosition(
+                PaperPosition position = paperTradingService.openPosition(
                         bybitSymbol,
                         "LONG",
                         currentPrice,
@@ -510,6 +533,15 @@ public class TradingScheduler {
                         signal,    // 🔥 传递信号
                         context    // 🔥 传递上下文
                 );
+                
+                // 🔥 修复：检查是否成功开仓
+                if (position != null) {
+                    log.info("✅ 模拟做多成功 - 持仓ID: {}", position.getPositionId());
+                    return true;
+                } else {
+                    log.warn("❌ 模拟做多失败 - 可能已有持仓");
+                    return false;
+                }
                 
             } else {
                 // 💰 真实交易模式
@@ -523,17 +555,20 @@ public class TradingScheduler {
                 
                 log.info("✅ Bybit做多成功 - OrderId: {}, 数量: {}盎司, 止损: ${}, 止盈: ${}",
                         orderId, bybitMinQty, stopLoss, takeProfit);
+                return true;
             }
                     
         } catch (Exception e) {
             log.error("❌ Bybit做多失败", e);
+            return false;
         }
     }
     
     /**
      * 通过Bybit做空黄金
+     * @return 是否成功开仓
      */
-    private void executeBybitSell(BigDecimal currentPrice) {
+    private boolean executeBybitSell(BigDecimal currentPrice) {
         try {
             // 计算止损止盈价格（支持固定和ATR动态模式）
             BigDecimal stopLoss;
@@ -546,7 +581,7 @@ public class TradingScheduler {
                     // 检查ATR波动率是否适合交易
                     if (!atrCalculator.isVolatilitySuitableForTrading(klines, atrMinThreshold, atrMaxThreshold)) {
                         log.warn("⚠️ 市场波动不适合交易，放弃开仓");
-                        return;
+                        return false;
                     }
                     
                     // 计算ATR动态止损止盈
@@ -580,7 +615,7 @@ public class TradingScheduler {
                 com.ltp.peter.augtrade.service.core.signal.TradingSignal signal = 
                         strategyOrchestrator.generateSignal(bybitSymbol);
                 
-                paperTradingService.openPosition(
+                PaperPosition position = paperTradingService.openPosition(
                         bybitSymbol,
                         "SHORT",
                         currentPrice,
@@ -591,6 +626,15 @@ public class TradingScheduler {
                         signal,    // 🔥 传递信号
                         context    // 🔥 传递上下文
                 );
+                
+                // 🔥 修复：检查是否成功开仓
+                if (position != null) {
+                    log.info("✅ 模拟做空成功 - 持仓ID: {}", position.getPositionId());
+                    return true;
+                } else {
+                    log.warn("❌ 模拟做空失败 - 可能已有持仓");
+                    return false;
+                }
                 
             } else {
                 // 💰 真实交易模式
@@ -604,10 +648,12 @@ public class TradingScheduler {
                 
                 log.info("✅ Bybit做空成功 - OrderId: {}, 数量: {}盎司, 止损: ${}, 止盈: ${}",
                         orderId, bybitMinQty, stopLoss, takeProfit);
+                return true;
             }
                     
         } catch (Exception e) {
             log.error("❌ Bybit做空失败", e);
+            return false;
         }
     }
     
@@ -618,6 +664,11 @@ public class TradingScheduler {
     @Scheduled(fixedRate = 5000)
     public void monitorPaperPositions() {
         if (!paperTrading) {
+            return;
+        }
+        
+        // 等待启动数据加载完成
+        if (!com.ltp.peter.augtrade.service.StartupDataLoader.isDataLoaded()) {
             return;
         }
         
