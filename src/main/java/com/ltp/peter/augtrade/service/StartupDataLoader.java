@@ -84,14 +84,29 @@ public class StartupDataLoader implements ApplicationRunner {
     }
     
     /**
-     * 加载历史K线数据
+     * 加载历史K线数据（只加载当天的数据）
      */
     private void loadHistoricalKlines() throws Exception {
-        log.info("📊 开始获取{}的历史K线数据（最近{}条，5分钟周期）", bybitSymbol, klinesCount);
+        // 计算当天的K线数量（从0点到现在）
+        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
+        LocalDateTime now = LocalDateTime.now();
+        long minutesSinceMidnight = java.time.Duration.between(todayStart, now).toMinutes();
+        int todayKlineCount = (int) (minutesSinceMidnight / 5) + 10; // 5分钟一条，额外加10条确保覆盖
+        
+        log.info("📊 开始获取{}当天的K线数据（约{}条，5分钟周期）", bybitSymbol, todayKlineCount);
         
         try {
-            // 从Bybit获取K线数据
-            JsonArray klines = bybitTradingService.getKlines(bybitSymbol, "5", klinesCount);
+            // 🔥 先删除当天的K线数据，确保数据是最新的
+            log.info("🗑️ 清理当天旧数据...");
+            int deletedCount = marketDataService.deleteTodayKlines(bybitSymbol, "5m");
+            if (deletedCount > 0) {
+                log.info("✅ 已删除当天旧K线数据：{} 条", deletedCount);
+            } else {
+                log.info("ℹ️ 当天暂无旧数据需要删除");
+            }
+            
+            // 从Bybit获取K线数据（只获取当天的数据）
+            JsonArray klines = bybitTradingService.getKlines(bybitSymbol, "5", todayKlineCount);
             
             if (klines == null || klines.size() == 0) {
                 log.warn("⚠️ 未获取到K线数据");

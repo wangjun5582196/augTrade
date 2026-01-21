@@ -168,4 +168,68 @@ public class MarketDataService {
             return new ArrayList<>();
         }
     }
+    
+    /**
+     * 删除当天的K线数据
+     * 用于启动时清理旧数据，确保重新获取最新的K线
+     * 
+     * @param symbol 交易对
+     * @param interval K线周期
+     * @return 删除的记录数
+     */
+    public int deleteTodayKlines(String symbol, String interval) {
+        try {
+            // 获取今天的开始时间（0点0分0秒）
+            LocalDateTime todayStart = LocalDateTime.now()
+                    .withHour(0)
+                    .withMinute(0)
+                    .withSecond(0)
+                    .withNano(0);
+            
+            // 删除今天的所有K线数据
+            int deletedCount = klineMapper.delete(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Kline>()
+                    .eq(Kline::getSymbol, symbol)
+                    .eq(Kline::getInterval, interval)
+                    .ge(Kline::getTimestamp, todayStart)
+            );
+            
+            log.info("🗑️ 删除{}今天的K线数据：{} 条（周期：{}）", symbol, deletedCount, interval);
+            return deletedCount;
+            
+        } catch (Exception e) {
+            log.error("删除今天K线数据失败", e);
+            return 0;
+        }
+    }
+    
+    /**
+     * 删除指定时间范围的K线数据
+     * 
+     * @param symbol 交易对
+     * @param interval K线周期
+     * @param startTime 开始时间
+     * @param endTime 结束时间
+     * @return 删除的记录数
+     */
+    public int deleteKlinesByTimeRange(String symbol, String interval, 
+                                       LocalDateTime startTime, LocalDateTime endTime) {
+        try {
+            int deletedCount = klineMapper.delete(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Kline>()
+                    .eq(Kline::getSymbol, symbol)
+                    .eq(Kline::getInterval, interval)
+                    .ge(Kline::getTimestamp, startTime)
+                    .le(Kline::getTimestamp, endTime)
+            );
+            
+            log.info("🗑️ 删除{}指定时间范围的K线数据：{} 条（{}至{}）", 
+                    symbol, deletedCount, startTime, endTime);
+            return deletedCount;
+            
+        } catch (Exception e) {
+            log.error("删除指定时间范围K线数据失败", e);
+            return 0;
+        }
+    }
 }

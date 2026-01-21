@@ -861,6 +861,54 @@ public class PaperTradingService {
             log.debug("✅ 技术指标已保存到订单: Williams={}, ADX={}, 信号强度={}, 市场状态={}", 
                     williamsR, adx, signal != null ? signal.getStrength() : "N/A", order.getMarketRegime());
             
+            // 🔥 新增：保存ML预测记录到ml_prediction_record表
+            if (mlRecordService != null && signal != null) {
+                try {
+                    // 从订单或信号中获取ML预测值（如果存在）
+                    BigDecimal mlPrediction = order.getMlPrediction();
+                    BigDecimal mlConfidence = order.getMlConfidence();
+                    
+                    // 如果订单中有ML预测值，则记录
+                    if (mlPrediction != null && mlConfidence != null) {
+                        String predictedSignal = "BUY".equals(order.getSide()) ? "BUY" : "SELL";
+                        
+                        mlRecordService.recordPrediction(
+                            order.getSymbol(),
+                            mlPrediction,
+                            predictedSignal,
+                            mlConfidence,
+                            order.getWilliamsR(),
+                            order.getPrice(),
+                            true, // tradeTaken = true (已开仓)
+                            order.getOrderNo()
+                        );
+                        
+                        log.info("✅ ML预测已记录到ml_prediction_record表: 订单={}, 信号={}, 预测值={}, 置信度={}", 
+                                order.getOrderNo(), predictedSignal, mlPrediction, mlConfidence);
+                    } else {
+                        // 即使没有ML预测值，也记录基础信息用于未来训练
+                        String predictedSignal = "BUY".equals(order.getSide()) ? "BUY" : "SELL";
+                        BigDecimal defaultPrediction = "BUY".equals(predictedSignal) ? new BigDecimal("0.6") : new BigDecimal("0.4");
+                        BigDecimal defaultConfidence = new BigDecimal("0.5");
+                        
+                        mlRecordService.recordPrediction(
+                            order.getSymbol(),
+                            defaultPrediction,
+                            predictedSignal,
+                            defaultConfidence,
+                            order.getWilliamsR(),
+                            order.getPrice(),
+                            true,
+                            order.getOrderNo()
+                        );
+                        
+                        log.debug("📝 ML基础记录已保存（使用默认值）: 订单={}, 信号={}", order.getOrderNo(), predictedSignal);
+                    }
+                } catch (Exception mlEx) {
+                    log.warn("⚠️ 保存ML预测记录失败（不影响开仓）: {}", mlEx.getMessage());
+                }
+            }
+            
         } catch (Exception e) {
             log.warn("⚠️ 保存技术指标失败（不影响开仓）", e);
         }

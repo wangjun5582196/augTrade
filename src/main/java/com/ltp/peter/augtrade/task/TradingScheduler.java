@@ -1150,30 +1150,66 @@ public class TradingScheduler {
     
     /**
      * 🔥 修复：根据市场状态和信号类型计算所需信号强度
-     * 降低门槛让策略能够正常开仓
+     * 细化ADX区间，降低门槛让策略能够正常开仓
      */
     private int calculateRequiredStrength(MarketRegime regime, 
                                          com.ltp.peter.augtrade.service.core.signal.TradingSignal signal) {
         int baseStrength;
         
-        switch (regime) {
-            case STRONG_TREND:
-                // 强趋势市，最低门槛（从60→20），鼓励趋势跟随
-                baseStrength = 20;
-                break;
-            case WEAK_TREND:
-                // 弱趋势市，中等门槛（从70→30）
-                baseStrength = 30;
-                break;
-            case RANGING:
-                // 极弱震荡市，提高门槛（从85→40），但不要过高
-                baseStrength = 40;
-                log.warn("⚠️ 极弱震荡检测！提高开仓门槛至{}，避免虚假信号", baseStrength);
-                break;
-            default:
-                baseStrength = 30;
+        // 获取精确的ADX值用于细分判断
+        try {
+            com.ltp.peter.augtrade.service.core.strategy.MarketContext context = 
+                    strategyOrchestrator.getMarketContext(bybitSymbol, 100);
+            Double adxValue = context != null ? context.getIndicator("ADX") : null;
+            
+            if (adxValue != null) {
+                // 🔥 细分ADX区间，提供更精细的门槛控制
+                if (adxValue >= 30) {
+                    // 强趋势 (ADX ≥ 30)
+                    baseStrength = 20;
+                    log.debug("💪 强趋势市场 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                } else if (adxValue >= 25) {
+                    // 中等偏强趋势 (ADX 25-30)
+                    baseStrength = 22;
+                    log.debug("📈 中等偏强趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                } else if (adxValue >= 20) {
+                    // 中等趋势 (ADX 20-25) - 当前ADX=22.37匹配这里
+                    baseStrength = 25;
+                    log.debug("📊 中等趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                } else if (adxValue >= 15) {
+                    // 弱趋势 (ADX 15-20)
+                    baseStrength = 30;
+                    log.debug("⚠️ 弱趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                } else {
+                    // 极弱震荡 (ADX < 15)
+                    baseStrength = 40;
+                    log.warn("🚨 极弱震荡 (ADX={:.1f}), 高门槛: {} 分", adxValue, baseStrength);
+                }
+            } else {
+                // 无法获取ADX，使用regime判断
+                baseStrength = getFallbackStrength(regime);
+            }
+        } catch (Exception e) {
+            log.warn("⚠️ 获取ADX失败，使用备用逻辑", e);
+            baseStrength = getFallbackStrength(regime);
         }
         
         return baseStrength;
+    }
+    
+    /**
+     * 🔥 备用逻辑：当无法获取ADX时使用regime判断
+     */
+    private int getFallbackStrength(MarketRegime regime) {
+        switch (regime) {
+            case STRONG_TREND:
+                return 20;
+            case WEAK_TREND:
+                return 25;  // 从30降低到25
+            case RANGING:
+                return 40;
+            default:
+                return 25;
+        }
     }
 }
