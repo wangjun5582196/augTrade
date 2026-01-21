@@ -87,11 +87,11 @@ bybit:
     take-profit-dollars: 15                 # ✅ 固定止盈$45/盎司（总$450，盈亏比1:2.5）
     
     # ATR动态模式参数（mode=atr时使用）
-    atr-stop-loss-multiplier: 2.0           # 🔥 P0修复-20260114：从3.0降到2.0，控制单笔最大亏损在50 USD内
-    atr-take-profit-multiplier: 2.0         # 🔥 P0修复-20260115：从3.0降到2.0，更容易触发止盈
+    atr-stop-loss-multiplier: 3.0           # 🔥 P0修复-20260121：从2.0提高到3.0，给盈利单更多空间
+    atr-take-profit-multiplier: 4.0         # 🔥 P0修复-20260121：从2.0提高到4.0，让利润奔跑
     atr-period: 14                          # ATR计算周期
     atr-min-threshold: 1.0                  # 🔥 P0修复-20260119：从2.5降到1.0，黄金正常波动范围（ATR通常1.0-3.0）
-    atr-max-threshold: 8.0                  # 🔥 P1修复：从15.0降到8.0，高波动期减少交易
+    atr-max-threshold: 6.0                  # 🔥 P0修复-20260121：从8.0降到6.0，高波动期停止交易
 
 # 交易平台配置
 trading:
@@ -113,9 +113,9 @@ trading:
     # 移动止损配置（利润最大化）🚀
     trailing-stop:
       enabled: true              # ✅ 启用移动止损
-      trigger-profit: 10.0       # 🔥 P0修复-20260115：从20降到10，更早触发保护利润
-      distance: 8.0              # 🔥 P0修复-20260115：从15降到8，跟踪更紧密
-      lock-profit-percent: 60.0  # 🔥 P0修复-20260115：从80%降到60%，更易触发
+      trigger-profit: 8.0        # 🔥 P0修复-20260121：从10.0降到8.0，更早触发保护利润
+      distance: 6.0              # 🔥 P0修复-20260121：从8.0降到6.0，跟踪更紧密
+      lock-profit-percent: 50.0  # 🔥 P0修复-20260121：从60%降到50%，更易触发
     
   # 策略配置
   strategy:

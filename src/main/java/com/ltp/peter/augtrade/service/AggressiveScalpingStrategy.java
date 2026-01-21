@@ -439,26 +439,56 @@ public class AggressiveScalpingStrategy {
         // 获取所有指标
         BigDecimal williamsR = indicatorService.calculateWilliamsR(klines, 14);
         BigDecimal rsi = indicatorService.calculateRSI(klines, 14);
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);  // ✨ 新增ADX
+        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        BigDecimal atr = indicatorService.calculateATR(klines, 14);
         double mlPrediction = mlPredictionService.predictMarketDirection(klines);
         
         BigDecimal currentPrice = klines.get(0).getClosePrice();
         BigDecimal price5 = klines.get(5).getClosePrice();
+        BigDecimal price15 = klines.get(Math.min(3, klines.size() - 1)).getClosePrice();
         BigDecimal momentum = currentPrice.subtract(price5);
         
-        // ✨ 修复：使用String.format正确显示ML值
-        log.info(String.format("📊 Williams: %.2f, RSI: %.2f, ML: %.2f, 动量: %s, ADX: %.2f", 
-                williamsR.doubleValue(), rsi.doubleValue(), mlPrediction, momentum, adx.doubleValue()));
+        // 计算EMA判断趋势方向
+        BigDecimal ema20 = indicatorService.calculateEMA(klines, 20);
+        BigDecimal ema50 = indicatorService.calculateEMA(klines, 50);
+        boolean isUptrend = ema20.compareTo(ema50) > 0;
+        boolean isDowntrend = ema20.compareTo(ema50) < 0;
+        
+        log.info(String.format("📊 Williams: %.2f, RSI: %.2f, ML: %.2f, 动量: %s, ADX: %.2f, ATR: %.2f", 
+                williamsR.doubleValue(), rsi.doubleValue(), mlPrediction, momentum, adx.doubleValue(), atr.doubleValue()));
+        log.info(String.format("📊 趋势: EMA20=%.2f, EMA50=%.2f, %s", 
+                ema20.doubleValue(), ema50.doubleValue(), isUptrend ? "上涨趋势" : (isDowntrend ? "下跌趋势" : "震荡")));
+        
+        // 🔥 P0修复1：ADX过滤 - ADX < 20时不交易
+        if (adx.compareTo(new BigDecimal("20")) < 0) {
+            log.info("⛔ ADX={} < 20，震荡市场，暂停交易", adx.doubleValue());
+            return Signal.HOLD;
+        }
+        
+        // 🔥 P0修复2：高波动保护 - ATR > 6.0时停止交易
+        if (atr.compareTo(new BigDecimal("6.0")) > 0) {
+            log.warn("⛔ ATR={} > 6.0，高波动期，暂停交易", atr.doubleValue());
+            return Signal.HOLD;
+        }
+        
+        // 🔥 P0修复3：暴力行情识别 - 15分钟涨跌幅 > 1%时停止交易
+        BigDecimal priceChange = currentPrice.subtract(price15)
+                                            .divide(price15, 4, RoundingMode.HALF_UP)
+                                            .multiply(new BigDecimal("100"));
+        if (priceChange.abs().compareTo(new BigDecimal("1.0")) > 0) {
+            log.warn("⛔ 暴力行情！15分钟变动: {}%, 暂停交易", priceChange);
+            return Signal.HOLD;
+        }
         
         int buyScore = 0;
         int sellScore = 0;
         
-        // ✨ ADX趋势判断（新增）
+        // ADX趋势判断
         int requiredScore = 5;  // 默认门槛5分
-        if (adx.compareTo(new BigDecimal("20")) < 0) {
-            // 震荡市场（ADX<20）：提高门槛到7分
-            requiredScore = 7;
-            log.info("⚠️ ADX={}, 震荡市场，提高评分要求至7分", adx.doubleValue());
+        if (adx.compareTo(new BigDecimal("20")) >= 0 && adx.compareTo(new BigDecimal("25")) < 0) {
+            // 弱趋势（ADX 20-25）：提高门槛到8分
+            requiredScore = 8;
+            log.info("⚠️ ADX={}, 弱趋势区间，提高评分要求至8分", adx.doubleValue());
         } else if (adx.compareTo(new BigDecimal("30")) > 0) {
             // 强趋势市场（ADX>30）：趋势确认加分
             if (momentum.compareTo(BigDecimal.ZERO) > 0) {
@@ -503,7 +533,19 @@ public class AggressiveScalpingStrategy {
         
         log.info("📊 评分 - 买入: {}, 卖出: {}, 需要: {}分", buyScore, sellScore, requiredScore);
         
-        // ✨ 使用动态门槛（震荡市场需要7分，正常市场5分）
+        // 🔥 P0修复4：强趋势中禁用逆向信号
+        if (adx.compareTo(new BigDecimal("25")) > 0) {
+            if (isUptrend) {
+                sellScore = 0;  // 清零SELL评分
+                log.info("🔥 强趋势上涨（ADX={}），禁用SELL信号", adx.doubleValue());
+            }
+            if (isDowntrend) {
+                buyScore = 0;  // 清零BUY评分
+                log.info("🔥 强趋势下跌（ADX={}），禁用BUY信号", adx.doubleValue());
+            }
+        }
+        
+        // 使用动态门槛
         if (buyScore >= requiredScore && buyScore > sellScore) {
             log.info("🚀 买入信号：综合评分{}", buyScore);
             return Signal.BUY;
