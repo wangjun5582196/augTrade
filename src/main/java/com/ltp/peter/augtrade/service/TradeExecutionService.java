@@ -56,6 +56,9 @@ public class TradeExecutionService {
     @org.springframework.beans.factory.annotation.Value("${trading.risk.trailing-stop.lock-profit-percent:70.0}")
     private BigDecimal trailingStopLockProfitPercent;
     
+    @org.springframework.beans.factory.annotation.Value("${trading.risk.max-single-loss:50.0}")
+    private BigDecimal maxSingleLoss;
+    
     /**
      * 执行买入交易（高波动版本：使用固定止损止盈）
      */
@@ -378,6 +381,15 @@ public class TradeExecutionService {
             return;
         }
         
+        // 🔥 P0修复：最大亏损保护（最优先级）
+        BigDecimal currentLoss = unrealizedPnl.abs();
+        if (unrealizedPnl.compareTo(BigDecimal.ZERO) < 0 && currentLoss.compareTo(maxSingleLoss) > 0) {
+            log.error("🚨 多头超过最大亏损限制 - 当前亏损: ${}, 限制: ${}, 强制平仓！", 
+                    currentLoss, maxSingleLoss);
+            executeSell(symbol, position.getQuantity(), "多头最大亏损保护");
+            return;
+        }
+        
         // 检查止损（多头：价格下跌到止损价）
         if (currentPrice.compareTo(position.getStopLossPrice()) <= 0) {
             String stopType = position.getTrailingStopEnabled() != null && position.getTrailingStopEnabled() 
@@ -440,6 +452,15 @@ public class TradeExecutionService {
             log.info("💰 空头触发止盈 - 当前: ${}, 止盈: ${}, 盈利: ${}", 
                     currentPrice, position.getTakeProfitPrice(), unrealizedPnl);
             executeBuyToCover(symbol, position.getQuantity(), "空头止盈");
+            return;
+        }
+        
+        // 🔥 P0修复：最大亏损保护（最优先级）
+        BigDecimal currentLoss = unrealizedPnl.abs();
+        if (unrealizedPnl.compareTo(BigDecimal.ZERO) < 0 && currentLoss.compareTo(maxSingleLoss) > 0) {
+            log.error("🚨 空头超过最大亏损限制 - 当前亏损: ${}, 限制: ${}, 强制平仓！", 
+                    currentLoss, maxSingleLoss);
+            executeBuyToCover(symbol, position.getQuantity(), "空头最大亏损保护");
             return;
         }
         

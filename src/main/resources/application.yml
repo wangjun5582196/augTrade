@@ -101,21 +101,22 @@ trading:
     min-trade-amount: 0.001      # BTC: 0.001个 ⭐
     max-trade-amount: 0.001      # BTC: 0.001个 ⭐
     
-  # 风控配置（优化版-适配BTC波动）
+  # 风控配置（优化版-适配黄金交易）
   risk:
     max-position-size: 0.001     # 最大持仓0.001 BTC
     max-daily-loss: 500          # 日亏损上限$500
     max-drawdown-percent: 5.0    # 最大回撤5%
-    fixed-stop-loss: 100         # 固定止损$100（BTC波动大）⚡
-    fixed-take-profit: 250       # 固定止盈$250（盈亏比2.5:1）⚡
-    max-holding-minutes: 30      # 最长持仓30分钟 ⚡
+    fixed-stop-loss: 10          # 🔥 固定止损$10/盎司（总$100）
+    fixed-take-profit: 15        # 🔥 固定止盈$15/盎司（总$150，盈亏比1.5:1）
+    max-holding-minutes: 30      # 最长持仓30分钟
+    max-single-loss: 50.0        # 🔥 P0修复：单笔最大亏损$50（防止止损失效）
     
     # 移动止损配置（利润最大化）🚀
     trailing-stop:
       enabled: true              # ✅ 启用移动止损
-      trigger-profit: 8.0        # 🔥 P0修复-20260121：从10.0降到8.0，更早触发保护利润
-      distance: 6.0              # 🔥 P0修复-20260121：从8.0降到6.0，跟踪更紧密
-      lock-profit-percent: 50.0  # 🔥 P0修复-20260121：从60%降到50%，更易触发
+      trigger-profit: 20.0       # 🔥 修复：从6.0提高到20.0，避免过早触发
+      distance: 8.0              # 🔥 修复：从4.0提高到8.0，给价格更多回调空间
+      lock-profit-percent: 50.0  # 🔥 修复：从40%提高到50%，保持合理止损距离
     
   # 策略配置
   strategy:

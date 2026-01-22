@@ -471,13 +471,29 @@ public class AggressiveScalpingStrategy {
             return Signal.HOLD;
         }
         
-        // 🔥 P0修复3：暴力行情识别 - 15分钟涨跌幅 > 1%时停止交易
+        // 🔥 P0修复3：暴力行情识别 - 15分钟涨跌幅 > 0.8%时停止交易（从1.0%降低到0.8%）
         BigDecimal priceChange = currentPrice.subtract(price15)
                                             .divide(price15, 4, RoundingMode.HALF_UP)
                                             .multiply(new BigDecimal("100"));
-        if (priceChange.abs().compareTo(new BigDecimal("1.0")) > 0) {
+        if (priceChange.abs().compareTo(new BigDecimal("0.8")) > 0) {
             log.warn("⛔ 暴力行情！15分钟变动: {}%, 暂停交易", priceChange);
             return Signal.HOLD;
+        }
+        
+        // 🔥 P0修复4：强趋势中必须先判断趋势方向，禁用逆向信号
+        if (adx.compareTo(new BigDecimal("25")) > 0) {
+            if (isUptrend) {
+                log.info("🔥 强趋势上涨（ADX={}，EMA20 {} > EMA50 {}），禁用SELL信号", 
+                        adx.doubleValue(), ema20.doubleValue(), ema50.doubleValue());
+                // 在上涨强趋势中，只允许BUY信号
+                // 继续评分，但SELL评分会在后面被清零
+            }
+            if (isDowntrend) {
+                log.info("🔥 强趋势下跌（ADX={}，EMA20 {} < EMA50 {}），禁用BUY信号", 
+                        adx.doubleValue(), ema20.doubleValue(), ema50.doubleValue());
+                // 在下跌强趋势中，只允许SELL信号
+                // 继续评分，但BUY评分会在后面被清零
+            }
         }
         
         int buyScore = 0;
@@ -490,14 +506,15 @@ public class AggressiveScalpingStrategy {
             requiredScore = 8;
             log.info("⚠️ ADX={}, 弱趋势区间，提高评分要求至8分", adx.doubleValue());
         } else if (adx.compareTo(new BigDecimal("30")) > 0) {
-            // 强趋势市场（ADX>30）：趋势确认加分
-            if (momentum.compareTo(BigDecimal.ZERO) > 0) {
+            // 强趋势市场（ADX>30）：但要注意趋势方向！
+            // 🔥 修复：只在顺势时加分
+            if (isUptrend && momentum.compareTo(BigDecimal.ZERO) > 0) {
                 buyScore += 2;
-                log.info("🔥 ADX={}, 强趋势 + 上涨动量 → +2分", adx.doubleValue());
+                log.info("🔥 ADX={}, 强上涨趋势 + 上涨动量 → BUY +2分", adx.doubleValue());
             }
-            if (momentum.compareTo(BigDecimal.ZERO) < 0) {
+            if (isDowntrend && momentum.compareTo(BigDecimal.ZERO) < 0) {
                 sellScore += 2;
-                log.info("🔥 ADX={}, 强趋势 + 下跌动量 → +2分", adx.doubleValue());
+                log.info("🔥 ADX={}, 强下跌趋势 + 下跌动量 → SELL +2分", adx.doubleValue());
             }
         }
         
@@ -531,19 +548,25 @@ public class AggressiveScalpingStrategy {
             log.info("📊 K线形态: 十字星 → 观望");
         }
         
-        log.info("📊 评分 - 买入: {}, 卖出: {}, 需要: {}分", buyScore, sellScore, requiredScore);
+        log.info("📊 初步评分 - 买入: {}, 卖出: {}, 需要: {}分", buyScore, sellScore, requiredScore);
         
-        // 🔥 P0修复4：强趋势中禁用逆向信号
+        // 🔥 P0修复：强趋势中禁用逆向信号（关键修复！）
         if (adx.compareTo(new BigDecimal("25")) > 0) {
             if (isUptrend) {
+                if (sellScore > 0) {
+                    log.warn("🚫 强上涨趋势（ADX={}），SELL评分{}被清零", adx.doubleValue(), sellScore);
+                }
                 sellScore = 0;  // 清零SELL评分
-                log.info("🔥 强趋势上涨（ADX={}），禁用SELL信号", adx.doubleValue());
             }
             if (isDowntrend) {
+                if (buyScore > 0) {
+                    log.warn("🚫 强下跌趋势（ADX={}），BUY评分{}被清零", adx.doubleValue(), buyScore);
+                }
                 buyScore = 0;  // 清零BUY评分
-                log.info("🔥 强趋势下跌（ADX={}），禁用BUY信号", adx.doubleValue());
             }
         }
+        
+        log.info("📊 最终评分 - 买入: {}, 卖出: {}, 需要: {}分", buyScore, sellScore, requiredScore);
         
         // 使用动态门槛
         if (buyScore >= requiredScore && buyScore > sellScore) {

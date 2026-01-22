@@ -53,6 +53,9 @@ public class TradingScheduler {
     private com.ltp.peter.augtrade.service.core.strategy.StrategyOrchestrator strategyOrchestrator;
     
     @Autowired
+    private SimplifiedTrendStrategy simplifiedTrendStrategy;
+    
+    @Autowired
     private PaperTradingService paperTradingService;
     
     @Autowired
@@ -229,13 +232,15 @@ public class TradingScheduler {
             BigDecimal currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
             log.info("当前黄金价格: ${}", currentPrice);
             
-            // 2. 使用新架构的策略编排器（多策略投票）
-            com.ltp.peter.augtrade.service.core.signal.TradingSignal tradingSignal = 
-                    strategyOrchestrator.generateSignal(bybitSymbol);
+            // 2. 🔥 使用精简趋势策略（SimplifiedTrend v2.0）
+            SimplifiedTrendStrategy.Signal strategySignal = simplifiedTrendStrategy.execute(bybitSymbol);
             
-            log.info("📊 新架构信号: {} (强度: {}, 得分: {}) - {}", 
-                    tradingSignal.getType(), tradingSignal.getStrength(), 
-                    tradingSignal.getScore(), tradingSignal.getReason());
+            log.info("📊 精简策略信号: {} - {}", strategySignal, 
+                    simplifiedTrendStrategy.getStrategyDescription());
+            
+            // 转换为TradingSignal格式（用于兼容现有代码）
+            com.ltp.peter.augtrade.service.core.signal.TradingSignal tradingSignal = 
+                    convertToTradingSignal(strategySignal, bybitSymbol);
             
             // 🔥 P0修复-20260115: 检查每日交易次数限制
             LocalDateTime now = LocalDateTime.now();
@@ -1146,6 +1151,42 @@ public class TradingScheduler {
             log.error("❌ 检测市场状态失败", e);
             return MarketRegime.WEAK_TREND;
         }
+    }
+    
+    /**
+     * 🔥 新增：转换SimplifiedTrendStrategy信号为TradingSignal
+     */
+    private com.ltp.peter.augtrade.service.core.signal.TradingSignal convertToTradingSignal(
+            SimplifiedTrendStrategy.Signal signal, String symbol) {
+        
+        java.util.List<Kline> klines = marketDataService.getLatestKlines(symbol, "5m", 50);
+        int strength = 0;
+        String explanation = "无交易信号";
+        
+        if (klines != null && klines.size() >= 50) {
+            strength = simplifiedTrendStrategy.getSignalStrength(klines);
+            explanation = simplifiedTrendStrategy.getSignalExplanation(klines, signal);
+        }
+        
+        com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType type;
+        if (signal == SimplifiedTrendStrategy.Signal.BUY) {
+            type = com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.BUY;
+        } else if (signal == SimplifiedTrendStrategy.Signal.SELL) {
+            type = com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.SELL;
+        } else {
+            type = com.ltp.peter.augtrade.service.core.signal.TradingSignal.SignalType.HOLD;
+        }
+        
+        // 使用Builder模式创建TradingSignal
+        return com.ltp.peter.augtrade.service.core.signal.TradingSignal.builder()
+                .type(type)
+                .strength(strength)
+                .score(strength)
+                .symbol(symbol)
+                .strategyName("SimplifiedTrend")
+                .reason(explanation)
+                .timestamp(LocalDateTime.now())
+                .build();
     }
     
     /**
