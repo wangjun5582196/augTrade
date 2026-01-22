@@ -2,7 +2,7 @@ package com.ltp.peter.augtrade.controller;
 
 import com.ltp.peter.augtrade.entity.BacktestResult;
 import com.ltp.peter.augtrade.entity.BacktestTrade;
-import com.ltp.peter.augtrade.service.BacktestService;
+import com.ltp.peter.augtrade.backtest.BacktestService;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;

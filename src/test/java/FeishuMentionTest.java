@@ -1,4 +1,4 @@
-import com.ltp.peter.augtrade.service.FeishuNotificationService;
+import com.ltp.peter.augtrade.notification.FeishuNotificationService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

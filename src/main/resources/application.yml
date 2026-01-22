@@ -120,6 +120,9 @@ trading:
     
   # 策略配置
   strategy:
+    # 🎯 策略工厂：只需修改这一行切换策略！
+    active: simplified-trend    # 可选: simplified-trend, balanced-aggressive, composite
+    
     enabled: true
     interval: 60000  # 🔥 P0修复：从10秒延长到60秒，减少噪音交易
     

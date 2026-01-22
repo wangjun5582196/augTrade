@@ -4,7 +4,8 @@ import com.ltp.peter.augtrade.entity.Position;
 import com.ltp.peter.augtrade.entity.TradeOrder;
 import com.ltp.peter.augtrade.mapper.PositionMapper;
 import com.ltp.peter.augtrade.mapper.TradeOrderMapper;
-import com.ltp.peter.augtrade.service.MarketDataService;
+import com.ltp.peter.augtrade.market.MarketDataService;
+import com.ltp.peter.augtrade.trading.broker.BybitTradingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -37,16 +38,16 @@ public class DashboardController {
     private MarketDataService marketDataService;
     
     @Autowired(required = false)
-    private com.ltp.peter.augtrade.service.BybitTradingService bybitTradingService;
+    private BybitTradingService bybitTradingService;
     
     @Autowired
     private com.ltp.peter.augtrade.mapper.KlineMapper klineMapper;
     
     @Autowired(required = false)
-    private com.ltp.peter.augtrade.service.core.strategy.StrategyOrchestrator strategyOrchestrator;
+    private com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator strategyOrchestrator;
     
     @Autowired(required = false)
-    private com.ltp.peter.augtrade.service.core.indicator.ATRCalculator atrCalculator;
+    private com.ltp.peter.augtrade.indicator.ATRCalculator atrCalculator;
     
     /**
      * 获取仪表板概览数据
@@ -592,7 +593,7 @@ public class DashboardController {
             String symbol = "XAUTUSDT";
             
             // 获取市场上下文
-            com.ltp.peter.augtrade.service.core.strategy.MarketContext context = 
+            com.ltp.peter.augtrade.strategy.core.MarketContext context = 
                 strategyOrchestrator.getMarketContext(symbol, 100);
             
             if (context == null) {
@@ -602,7 +603,7 @@ public class DashboardController {
             }
             
             // 生成信号
-            com.ltp.peter.augtrade.service.core.signal.TradingSignal signal = 
+            com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
                 strategyOrchestrator.generateSignal(symbol);
             
             if (signal == null) {
@@ -614,11 +615,11 @@ public class DashboardController {
             // 获取技术指标
             Double adx = context.getIndicator("ADX");
             Double williamsR = context.getIndicator("WilliamsR");
-            com.ltp.peter.augtrade.service.core.indicator.BollingerBands bb = 
+            com.ltp.peter.augtrade.indicator.BollingerBands bb = 
                 context.getIndicator("BollingerBands");
-            com.ltp.peter.augtrade.service.core.indicator.CandlePattern pattern = 
+            com.ltp.peter.augtrade.indicator.CandlePattern pattern = 
                 context.getIndicator("CandlePattern");
-            com.ltp.peter.augtrade.service.core.indicator.EMACalculator.EMATrend emaTrend = 
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend emaTrend = 
                 context.getIndicator("EMATrend");
             
             // 计算价格在布林带的位置百分比
@@ -646,12 +647,12 @@ public class DashboardController {
             // 获取策略投票详情
             List<Map<String, Object>> votes = new ArrayList<>();
             if (strategyOrchestrator != null) {
-                List<com.ltp.peter.augtrade.service.core.strategy.Strategy> strategies = 
+                List<com.ltp.peter.augtrade.strategy.core.Strategy> strategies = 
                     strategyOrchestrator.getActiveStrategies();
                 
-                for (com.ltp.peter.augtrade.service.core.strategy.Strategy strategy : strategies) {
+                for (com.ltp.peter.augtrade.strategy.core.Strategy strategy : strategies) {
                     try {
-                        com.ltp.peter.augtrade.service.core.signal.TradingSignal strategySignal = 
+                        com.ltp.peter.augtrade.strategy.signal.TradingSignal strategySignal = 
                             strategy.generateSignal(context);
                         
                         Map<String, Object> vote = new HashMap<>();

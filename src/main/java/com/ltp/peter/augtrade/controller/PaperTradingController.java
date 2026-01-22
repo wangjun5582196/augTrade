@@ -2,7 +2,7 @@ package com.ltp.peter.augtrade.controller;
 
 import com.ltp.peter.augtrade.entity.TradeOrder;
 import com.ltp.peter.augtrade.mapper.TradeOrderMapper;
-import com.ltp.peter.augtrade.service.PaperTradingService;
+import com.ltp.peter.augtrade.trading.execution.PaperTradingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
