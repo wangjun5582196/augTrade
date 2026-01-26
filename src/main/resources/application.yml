@@ -114,14 +114,14 @@ trading:
     # 移动止损配置（利润最大化）🚀
     trailing-stop:
       enabled: true              # ✅ 启用移动止损
-      trigger-profit: 20.0       # 🔥 修复：从6.0提高到20.0，避免过早触发
-      distance: 8.0              # 🔥 修复：从4.0提高到8.0，给价格更多回调空间
-      lock-profit-percent: 50.0  # 🔥 修复：从40%提高到50%，保持合理止损距离
+      trigger-profit: 30.0       # 🔥 优化-20260126：从20.0提高到30.0，减少过早触发和被扫
+      distance: 12.0             # 🔥 优化-20260126：从8.0提高到12.0，给价格更大回调空间
+      lock-profit-percent: 60.0  # 🔥 优化-20260126：从50%提高到60%，锁定更多利润
     
   # 策略配置
   strategy:
     # 🎯 策略工厂：只需修改这一行切换策略！
-    active: simplified-trend    # 可选: simplified-trend, balanced-aggressive, composite
+    active: composite    # 🔥 20260126优化：切换到composite策略，启用K线形态+ADX≥30+Williams R优化
     
     enabled: true
     interval: 60000  # 🔥 P0修复：从10秒延长到60秒，减少噪音交易
