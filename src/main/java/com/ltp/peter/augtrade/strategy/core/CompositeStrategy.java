@@ -95,22 +95,19 @@ public class CompositeStrategy implements Strategy {
             
             log.info("[{}] 综合评分 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
             
-            // 🔥 P0修复: 震荡市和弱趋势市场过滤 - 改为提高门槛而非完全禁止
+            // 🔥 P0修复-20260126: 严格执行ADX>20规则（复盘发现85.7%交易违反此规则）
             Double adx = context.getIndicator("ADX");
             if (adx != null) {
-                if (adx < 15) {
-                    // 极弱趋势(ADX<15): 显著提高阈值（而非完全禁止）
-                    int veryWeakTrendThreshold = 12;  // 需要12分以上（比正常的6分高一倍）
-                    if (buyScore < veryWeakTrendThreshold && sellScore < veryWeakTrendThreshold) {
-                        log.warn("[{}] ⛔ 极弱趋势市场(ADX={}),信号强度不足(需要≥{}分)", 
-                                STRATEGY_NAME, String.format("%.2f", adx), veryWeakTrendThreshold);
-                        return createHoldSignal(String.format("极弱趋势需要超强信号(ADX=%.2f, 需要≥%d分)", 
-                                adx, veryWeakTrendThreshold), buyScore, sellScore);
-                    }
-                    log.info("[{}] ⚡ 极弱趋势市场(ADX={}),但信号足够强(做多:{}, 做空:{})，允许交易", 
-                            STRATEGY_NAME, String.format("%.2f", adx), buyScore, sellScore);
-                } else if (adx >= 15 && adx < 25) {
-                    // 弱趋势(ADX 15-25): 适度提高阈值
+                if (adx < 20.0) {
+                    // 🚨 核心规则：ADX<20震荡市场，严格禁止交易
+                    log.error("[{}] ❌ ADX过滤！ADX={} < 20，震荡市场禁止交易", 
+                            STRATEGY_NAME, String.format("%.2f", adx));
+                    log.error("[{}] 📊 当前评分 - 做多:{}, 做空:{} 被拒绝", 
+                            STRATEGY_NAME, buyScore, sellScore);
+                    return createHoldSignal(String.format("❌ ADX过滤：ADX=%.2f < 20（震荡市不交易）", adx), 
+                            buyScore, sellScore);
+                } else if (adx >= 20.0 && adx < 25.0) {
+                    // 弱趋势(ADX 20-25): 适度提高阈值
                     int weakTrendThreshold = 9;  // 需要9分以上
                     if (buyScore < weakTrendThreshold && sellScore < weakTrendThreshold) {
                         log.warn("[{}] ⏸️ 弱趋势市场(ADX={}),信号强度不足(需要≥{}分)", 
@@ -118,21 +115,37 @@ public class CompositeStrategy implements Strategy {
                         return createHoldSignal(String.format("弱趋势需要更强信号(ADX=%.2f, 需要≥%d分)", 
                                 adx, weakTrendThreshold), buyScore, sellScore);
                     }
-                    log.info("[{}] ⚡ 弱趋势市场(ADX={}),但信号足够强(做多:{}, 做空:{})", 
+                    log.info("[{}] ✅ 弱趋势市场(ADX={}),信号足够强(做多:{}, 做空:{})", 
+                            STRATEGY_NAME, String.format("%.2f", adx), buyScore, sellScore);
+                } else {
+                    // 强趋势(ADX>=25): 正常阈值
+                    log.info("[{}] ✅ 强趋势市场(ADX={}),使用正常阈值(做多:{}, 做空:{})", 
                             STRATEGY_NAME, String.format("%.2f", adx), buyScore, sellScore);
                 }
+            } else {
+                log.warn("[{}] ⚠️ ADX数据缺失，暂停交易以确保安全", STRATEGY_NAME);
+                return createHoldSignal("ADX数据缺失，暂停交易", buyScore, sellScore);
             }
             
             // 根据得分生成信号
             if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                // 🔥 P0修复: 生成做多信号前进行过滤检查
+                // 🔥 P0修复-20260126: 做多信号增加反向保护
+                // 检查Williams R是否超买（防止追高）
+                Double williamsR = context.getIndicator("WilliamsR");
+                if (williamsR != null && williamsR > -20.0) {
+                    log.warn("[{}] ⛔ 做多信号被过滤：Williams R超买({})，拒绝追高", 
+                            STRATEGY_NAME, String.format("%.2f", williamsR));
+                    return createHoldSignal(String.format("Williams R超买(%.2f)，拒绝做多", williamsR), 
+                            buyScore, sellScore);
+                }
+                
                 TradingSignal buySignal = TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
                         .strength(calculateSignalStrength(buyScore, sellScore))
                         .score(buyScore)
                         .strategyName(STRATEGY_NAME)
-                        .reason(String.format("综合策略做多 (得分:%d) [%s]", 
-                                buyScore, String.join(", ", buyReasons)))
+                        .reason(String.format("综合策略做多 (得分:%d, ADX:%.1f) [%s]", 
+                                buyScore, adx, String.join(", ", buyReasons)))
                         .symbol(context.getSymbol())
                         .currentPrice(context.getCurrentPrice())
                         .build();
@@ -147,18 +160,32 @@ public class CompositeStrategy implements Strategy {
                     return createHoldSignal("K线形态不支持做多", buyScore, sellScore);
                 }
                 
+                log.info("[{}] 🚀 生成做多信号 - ADX:{}, Williams R:{}, 强度:{}", 
+                        STRATEGY_NAME, String.format("%.2f", adx), 
+                        williamsR != null ? String.format("%.2f", williamsR) : "N/A",
+                        buySignal.getStrength());
+                
                 return buySignal;
             }
             
             if (sellScore >= SIGNAL_THRESHOLD && sellScore > buyScore) {
-                // 🔥 P0修复: 生成做空信号前进行过滤检查
+                // 🔥 P0修复-20260126: 做空信号增加反向保护
+                // 检查Williams R是否超卖（防止在超卖时做空）
+                Double williamsR = context.getIndicator("WilliamsR");
+                if (williamsR != null && williamsR < -80.0) {
+                    log.warn("[{}] ⛔ 做空信号被过滤：Williams R超卖({})，拒绝做空", 
+                            STRATEGY_NAME, String.format("%.2f", williamsR));
+                    return createHoldSignal(String.format("Williams R超卖(%.2f)，拒绝做空", williamsR), 
+                            buyScore, sellScore);
+                }
+                
                 TradingSignal sellSignal = TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
                         .strength(calculateSignalStrength(sellScore, buyScore))
                         .score(sellScore)
                         .strategyName(STRATEGY_NAME)
-                        .reason(String.format("综合策略做空 (得分:%d) [%s]", 
-                                sellScore, String.join(", ", sellReasons)))
+                        .reason(String.format("综合策略做空 (得分:%d, ADX:%.1f) [%s]", 
+                                sellScore, adx, String.join(", ", sellReasons)))
                         .symbol(context.getSymbol())
                         .currentPrice(context.getCurrentPrice())
                         .build();
@@ -172,6 +199,11 @@ public class CompositeStrategy implements Strategy {
                 if (!validateCandlePattern(context, TradingSignal.SignalType.SELL)) {
                     return createHoldSignal("K线形态不支持做空", buyScore, sellScore);
                 }
+                
+                log.info("[{}] 📉 生成做空信号 - ADX:{}, Williams R:{}, 强度:{}", 
+                        STRATEGY_NAME, String.format("%.2f", adx), 
+                        williamsR != null ? String.format("%.2f", williamsR) : "N/A",
+                        sellSignal.getStrength());
                 
                 return sellSignal;
             }

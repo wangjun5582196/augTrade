@@ -149,25 +149,26 @@ public class SimplifiedTrendStrategy {
         if (isUptrend) {
             log.info("📈 上涨趋势确认（EMA20 > EMA50）");
             
-            // 买入条件：价格回调到EMA20附近（±0.3%以内）
-            // 或价格略低于EMA20（回调买入机会）
-            if (priceToEma20.compareTo(new BigDecimal("0.3")) <= 0 && 
+            // 🔥 P0修复-20260126: 放宽强趋势时的回调条件
+            // 在强趋势（ADX>25）时，价格在EMA20上方0.8%以内也可以买入
+            // 原条件过于严格，导致错过下午的强势上涨机会
+            if (priceToEma20.compareTo(new BigDecimal("0.8")) <= 0 && 
                 priceToEma20.compareTo(new BigDecimal("-0.5")) >= 0) {
                 
                 // 额外确认：确保当前动量向上（避免下跌中途买入）
                 if (momentum.compareTo(BigDecimal.ZERO) >= 0) {
                     log.info("🚀 ✅ 买入信号触发！");
-                    log.info("   理由：上涨趋势 + 价格回调EMA20（{}%）+ 动量向上", priceToEma20);
+                    log.info("   理由：强趋势(ADX>{}) + 价格靠近EMA20（{}%）+ 动量向上", 25, priceToEma20);
                     log.info("   止损：ATR {} * 3.0 = {} 美元", atr, atr.multiply(new BigDecimal("3.0")));
                     log.info("   止盈：ATR {} * 4.0 = {} 美元", atr, atr.multiply(new BigDecimal("4.0")));
                     return Signal.BUY;
                 } else {
-                    log.info("⚠️ 价格虽回调EMA20，但动量向下，等待企稳");
+                    log.info("⚠️ 价格虽靠近EMA20，但动量向下，等待企稳");
                 }
             } else if (priceToEma20.compareTo(new BigDecimal("-0.5")) < 0) {
                 log.info("⚠️ 价格远低于EMA20（{}%），等待回归", priceToEma20);
             } else {
-                log.info("⚠️ 价格高于EMA20（{}%），等待回调", priceToEma20);
+                log.info("⚠️ 价格高于EMA20超过0.8%（当前{}%），等待回调", priceToEma20);
             }
         }
         
@@ -177,25 +178,25 @@ public class SimplifiedTrendStrategy {
         if (isDowntrend) {
             log.info("📉 下跌趋势确认（EMA20 < EMA50）");
             
-            // 卖出条件：价格反弹到EMA20附近（±0.3%以内）
-            // 或价格略高于EMA20（反弹做空机会）
+            // 🔥 P0修复-20260126: 同样放宽强趋势时的反弹条件
+            // 在强趋势时，价格在EMA20下方0.8%以内也可以做空
             if (priceToEma20.compareTo(new BigDecimal("0.5")) <= 0 && 
-                priceToEma20.compareTo(new BigDecimal("-0.3")) >= 0) {
+                priceToEma20.compareTo(new BigDecimal("-0.8")) >= 0) {
                 
                 // 额外确认：确保当前动量向下（避免上涨中途卖出）
                 if (momentum.compareTo(BigDecimal.ZERO) <= 0) {
                     log.info("📉 ✅ 卖出信号触发！");
-                    log.info("   理由：下跌趋势 + 价格反弹EMA20（{}%）+ 动量向下", priceToEma20);
+                    log.info("   理由：强趋势(ADX>{}) + 价格靠近EMA20（{}%）+ 动量向下", 25, priceToEma20);
                     log.info("   止损：ATR {} * 3.0 = {} 美元", atr, atr.multiply(new BigDecimal("3.0")));
                     log.info("   止盈：ATR {} * 4.0 = {} 美元", atr, atr.multiply(new BigDecimal("4.0")));
                     return Signal.SELL;
                 } else {
-                    log.info("⚠️ 价格虽反弹EMA20，但动量向上，等待回落");
+                    log.info("⚠️ 价格虽靠近EMA20，但动量向上，等待回落");
                 }
             } else if (priceToEma20.compareTo(new BigDecimal("0.5")) > 0) {
                 log.info("⚠️ 价格远高于EMA20（{}%），等待回归", priceToEma20);
             } else {
-                log.info("⚠️ 价格低于EMA20（{}%），等待反弹", priceToEma20);
+                log.info("⚠️ 价格低于EMA20超过0.8%（当前{}%），等待反弹", priceToEma20);
             }
         }
         
