@@ -616,11 +616,11 @@ public class BacktestService {
             BigDecimal[] macd = indicatorService.calculateMACD(klines, 12, 26, 9);
             if (macd != null && macd.length >= 3) {
                 com.ltp.peter.augtrade.indicator.MACDResult macdResult = 
-                    new com.ltp.peter.augtrade.indicator.MACDResult(
-                        macd[0].doubleValue(), 
-                        macd[1].doubleValue(), 
-                        macd[2].doubleValue()
-                    );
+                    com.ltp.peter.augtrade.indicator.MACDResult.builder()
+                        .macdLine(macd[0].doubleValue())
+                        .signalLine(macd[1].doubleValue())
+                        .histogram(macd[2].doubleValue())
+                        .build();
                 context.addIndicator("MACD", macdResult);
             }
             

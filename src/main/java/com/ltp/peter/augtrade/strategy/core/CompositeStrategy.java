@@ -3,6 +3,8 @@ package com.ltp.peter.augtrade.strategy.core;
 import com.ltp.peter.augtrade.indicator.BollingerBands;
 import com.ltp.peter.augtrade.indicator.CandlePattern;
 import com.ltp.peter.augtrade.indicator.EMACalculator;
+import com.ltp.peter.augtrade.ml.MLPrediction;
+import com.ltp.peter.augtrade.ml.MLPredictionEnhancedService;
 import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +41,9 @@ public class CompositeStrategy implements Strategy {
     
     @Autowired(required = false)
     private List<Strategy> strategies;
+    
+    @Autowired(required = false)
+    private MLPredictionEnhancedService mlPredictionService;
     
     @Override
     public TradingSignal generateSignal(MarketContext context) {
@@ -151,24 +156,50 @@ public class CompositeStrategy implements Strategy {
             
             // 根据得分生成信号
             if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                Double williamsR = context.getIndicator("WilliamsR");
-                
-                // 🔥 P0修复-20260126: Williams R黄金区间控制（数据驱动）
-                // 数据显示：WR -80~-60胜率85.7%，平均盈利$65.86/笔
-                if (williamsR != null) {
-                    if (williamsR > -60.0) {
-                        log.warn("[{}] ⛔ 做多信号被过滤：WR={}不在黄金区间-80~-60（数据显示WR>-60平均亏损）", 
-                                STRATEGY_NAME, String.format("%.2f", williamsR));
-                        return createHoldSignal(String.format("WR=%.2f需在-80~-60黄金区间", williamsR), 
-                                buyScore, sellScore);
-                    } else if (williamsR < -80.0) {
-                        log.warn("[{}] ⛔ 做多信号被过滤：WR={}极度超卖（数据显示WR<-80平均亏损$11.24/笔）", 
-                                STRATEGY_NAME, String.format("%.2f", williamsR));
-                        return createHoldSignal(String.format("WR=%.2f过于超卖，避免抄底失败", williamsR), 
-                                buyScore, sellScore);
+                // 🔥 ML震荡过滤器 (2026-01-27新增，震荡精确率94%)
+                // ⚠️ 重要：ML过滤放在最前面，作为第一道防线
+                if (mlPredictionService != null) {
+                    try {
+                        MLPrediction mlPred = mlPredictionService.predict(context);
+                        
+                        if (mlPred != null) {
+                            // 场景1: ML高置信度识别为震荡（精确率94%！）
+                            if (mlPred.isHighConfidenceRanging()) {
+                                log.warn("[{}] ❌ ML识别为震荡期 (置信度:{}%，精确率94%)，拒绝开仓", 
+                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbHold() * 100));
+                                return createHoldSignal(
+                                        String.format("ML识别为震荡期(%.1f%%)，避免无效交易", 
+                                                mlPred.getProbHold() * 100),
+                                        buyScore, sellScore);
+                            }
+                            
+                            // 场景2: ML预测下跌
+                            if (mlPred.isHighConfidenceDown()) {
+                                log.warn("[{}] ⚠️ ML预测下跌 (概率:{}%)，拒绝做多", 
+                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbDown() * 100));
+                                return createHoldSignal(
+                                        String.format("ML预测下跌(%.1f%%)，避免逆势", 
+                                                mlPred.getProbDown() * 100),
+                                        buyScore, sellScore);
+                            }
+                            
+                            // 场景3: ML倾向震荡但不确定，降低仓位
+                            if (mlPred.isTrendingRanging()) {
+                                log.info("[{}] ⚠️ ML倾向震荡 (概率:{}%)，保守处理", 
+                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbHold() * 100));
+                                buyScore = (int)(buyScore * 0.7);  // 降低评分
+                                log.info("[{}] 📊 ML调整后评分: {}", STRATEGY_NAME, buyScore);
+                            }
+                            
+                            // 场景4: ML确认上涨（虽然精确率只有14%，但可以作为参考）
+                            if (mlPred.isHighConfidenceUp()) {
+                                log.info("[{}] ✅ ML高置信度支持做多 (概率:{}%)", 
+                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbUp() * 100));
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.error("[{}] ML预测异常，继续使用传统策略", STRATEGY_NAME, e);
                     }
-                    log.info("[{}] ✅ WR={}在黄金区间-80~-60，符合最优条件", 
-                            STRATEGY_NAME, String.format("%.2f", williamsR));
                 }
                 
                 TradingSignal buySignal = TradingSignal.builder()
@@ -192,6 +223,7 @@ public class CompositeStrategy implements Strategy {
                     return createHoldSignal("K线形态不支持做多", buyScore, sellScore);
                 }
                 
+                Double williamsR = context.getIndicator("WilliamsR");
                 log.info("[{}] 🚀 生成做多信号 - ADX:{}, Williams R:{}, 强度:{}", 
                         STRATEGY_NAME, String.format("%.2f", adx), 
                         williamsR != null ? String.format("%.2f", williamsR) : "N/A",

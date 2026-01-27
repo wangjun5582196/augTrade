@@ -1167,23 +1167,23 @@ public class TradingScheduler {
                 if (adxValue >= 30) {
                     // 强趋势 (ADX ≥ 30)
                     baseStrength = 20;
-                    log.debug("💪 强趋势市场 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                    log.debug("💪 强趋势市场 (ADX={}), 门槛: {} 分", String.format("%.1f", adxValue), baseStrength);
                 } else if (adxValue >= 25) {
                     // 中等偏强趋势 (ADX 25-30)
                     baseStrength = 22;
-                    log.debug("📈 中等偏强趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                    log.debug("📈 中等偏强趋势 (ADX={}), 门槛: {} 分", String.format("%.1f", adxValue), baseStrength);
                 } else if (adxValue >= 20) {
                     // 中等趋势 (ADX 20-25) - 当前ADX=22.37匹配这里
                     baseStrength = 25;
-                    log.debug("📊 中等趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                    log.debug("📊 中等趋势 (ADX={}), 门槛: {} 分", String.format("%.1f", adxValue), baseStrength);
                 } else if (adxValue >= 15) {
                     // 弱趋势 (ADX 15-20)
                     baseStrength = 30;
-                    log.debug("⚠️ 弱趋势 (ADX={:.1f}), 门槛: {} 分", adxValue, baseStrength);
+                    log.debug("⚠️ 弱趋势 (ADX={}), 门槛: {} 分", String.format("%.1f", adxValue), baseStrength);
                 } else {
                     // 极弱震荡 (ADX < 15)
                     baseStrength = 40;
-                    log.warn("🚨 极弱震荡 (ADX={:.1f}), 高门槛: {} 分", adxValue, baseStrength);
+                    log.warn("🚨 极弱震荡 (ADX={}), 高门槛: {} 分", String.format("%.1f", adxValue), baseStrength);
                 }
             } else {
                 // 无法获取ADX，使用regime判断
