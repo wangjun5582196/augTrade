@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,9 +37,12 @@ public class RSICalculator implements TechnicalIndicator<Double> {
             return null;
         }
         
-        // 计算价格变化
-        double gainSum = 0;
-        double lossSum = 0;
+        // 🔥 P1修复-20260128: 使用Wilder's Smoothing（标准RSI算法）
+        // Bug修复：之前使用简单平均，导致RSI滞后
+        
+        // 计算价格变化序列
+        List<Double> gains = new ArrayList<>();
+        List<Double> losses = new ArrayList<>();
         
         for (int i = klines.size() - period; i < klines.size(); i++) {
             BigDecimal currentClose = klines.get(i).getClosePrice();
@@ -46,15 +50,17 @@ public class RSICalculator implements TechnicalIndicator<Double> {
             BigDecimal change = currentClose.subtract(previousClose);
             
             if (change.compareTo(BigDecimal.ZERO) > 0) {
-                gainSum += change.doubleValue();
+                gains.add(change.doubleValue());
+                losses.add(0.0);
             } else {
-                lossSum += Math.abs(change.doubleValue());
+                gains.add(0.0);
+                losses.add(Math.abs(change.doubleValue()));
             }
         }
         
-        // 计算平均涨跌幅
-        double avgGain = gainSum / period;
-        double avgLoss = lossSum / period;
+        // 使用Wilder's Smoothing计算平均涨跌幅
+        double avgGain = calculateWildersSmoothing(gains);
+        double avgLoss = calculateWildersSmoothing(losses);
         
         // 避免除零
         if (avgLoss == 0) {
@@ -66,6 +72,32 @@ public class RSICalculator implements TechnicalIndicator<Double> {
         double rsi = 100 - (100 / (1 + rs));
         
         return Math.round(rsi * 100.0) / 100.0;
+    }
+    
+    /**
+     * 🔥 新增方法：Wilder's Smoothing
+     * 类似EMA，但使用1/period作为平滑因子
+     */
+    private double calculateWildersSmoothing(List<Double> values) {
+        if (values.isEmpty()) {
+            return 0.0;
+        }
+        
+        // 第一个值：简单平均
+        double sum = 0.0;
+        int count = Math.min(period, values.size());
+        for (int i = 0; i < count; i++) {
+            sum += values.get(i);
+        }
+        double smoothed = sum / period;
+        
+        // 后续值：Wilder's Smoothing
+        // Smoothed = (prevSmoothed * (period-1) + currentValue) / period
+        for (int i = period; i < values.size(); i++) {
+            smoothed = (smoothed * (period - 1) + values.get(i)) / period;
+        }
+        
+        return smoothed;
     }
     
     @Override

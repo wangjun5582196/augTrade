@@ -94,7 +94,8 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
     }
     
     /**
-     * 🔥 P0修复: 计算ADX并返回完整结果(包含+DI/-DI和趋势方向)
+     * 🔥 P0修复-20260128: 计算ADX并返回完整结果(包含+DI/-DI和趋势方向)
+     * Bug修复: 之前只返回DX值，现在正确计算ADX（DX的移动平均）
      */
     public ADXResult calculateWithDirection(List<Kline> klines) {
         if (!hasEnoughData(klines)) {
@@ -103,10 +104,18 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
         }
         
         try {
-            // 计算+DM和-DM (Directional Movement)
-            List<Double> plusDM = new ArrayList<>();
-            List<Double> minusDM = new ArrayList<>();
-            List<Double> trueRanges = new ArrayList<>();
+            // 🔥 调试：打印K线时间顺序，确认是否需要排序
+            if (klines.size() >= 3) {
+                log.debug("[ADX-DEBUG] K线顺序检查 - 第0根: {}, 第1根: {}, 第2根: {}", 
+                         klines.get(0).getTimestamp(),
+                         klines.get(1).getTimestamp(),
+                         klines.get(2).getTimestamp());
+            }
+            
+            // 1. 计算每根K线的+DM、-DM、TR
+            List<Double> plusDMList = new ArrayList<>();
+            List<Double> minusDMList = new ArrayList<>();
+            List<Double> trList = new ArrayList<>();
             
             for (int i = 1; i < klines.size(); i++) {
                 Kline current = klines.get(i);
@@ -119,42 +128,92 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
                 double plusDMValue = (highDiff > lowDiff && highDiff > 0) ? highDiff : 0;
                 double minusDMValue = (lowDiff > highDiff && lowDiff > 0) ? lowDiff : 0;
                 
-                plusDM.add(plusDMValue);
-                minusDM.add(minusDMValue);
+                plusDMList.add(plusDMValue);
+                minusDMList.add(minusDMValue);
                 
                 // 计算真实波幅 (True Range)
                 double tr1 = current.getHighPrice().doubleValue() - current.getLowPrice().doubleValue();
                 double tr2 = Math.abs(current.getHighPrice().doubleValue() - previous.getClosePrice().doubleValue());
                 double tr3 = Math.abs(current.getLowPrice().doubleValue() - previous.getClosePrice().doubleValue());
                 
-                trueRanges.add(Math.max(tr1, Math.max(tr2, tr3)));
+                trList.add(Math.max(tr1, Math.max(tr2, tr3)));
             }
             
-            // 计算平滑的+DM、-DM和TR
-            double smoothedPlusDM = calculateSmoothed(plusDM, period);
-            double smoothedMinusDM = calculateSmoothed(minusDM, period);
-            double smoothedTR = calculateSmoothed(trueRanges, period);
+            // 2. 计算DX序列（每根K线一个DX值）
+            List<Double> dxList = new ArrayList<>();
+            
+            for (int i = period - 1; i < plusDMList.size(); i++) {
+                // 计算这个窗口的平滑值
+                double smoothedPlusDM = calculateSmoothedForWindow(plusDMList, i - period + 1, i + 1);
+                double smoothedMinusDM = calculateSmoothedForWindow(minusDMList, i - period + 1, i + 1);
+                double smoothedTR = calculateSmoothedForWindow(trList, i - period + 1, i + 1);
+                
+                if (smoothedTR == 0) {
+                    dxList.add(0.0);
+                    continue;
+                }
+                
+                double plusDI = (smoothedPlusDM / smoothedTR) * 100;
+                double minusDI = (smoothedMinusDM / smoothedTR) * 100;
+                
+                double diDiff = Math.abs(plusDI - minusDI);
+                double diSum = plusDI + minusDI;
+                
+                if (diSum == 0) {
+                    dxList.add(0.0);
+                } else {
+                    double dx = (diDiff / diSum) * 100;
+                    dxList.add(dx);
+                }
+            }
+            
+            // 3. 🔥 关键修复：计算ADX（DX的移动平均）
+            if (dxList.size() < period) {
+                log.warn("DX序列数据不足，需要至少 {} 个DX值", period);
+                return null;
+            }
+            
+            double adx = calculateSmoothedForWindow(dxList, dxList.size() - period, dxList.size());
+            
+            // 4. 计算最新的+DI和-DI
+            double smoothedPlusDM = calculateSmoothed(plusDMList, period);
+            double smoothedMinusDM = calculateSmoothed(minusDMList, period);
+            double smoothedTR = calculateSmoothed(trList, period);
+            
+            // 🔥 调试：打印最近几个+DM和-DM值
+            if (plusDMList.size() >= 5) {
+                int size = plusDMList.size();
+                log.debug("[ADX-DEBUG] 最近5个+DM: [{}, {}, {}, {}, {}]",
+                         String.format("%.2f", plusDMList.get(size-5)),
+                         String.format("%.2f", plusDMList.get(size-4)),
+                         String.format("%.2f", plusDMList.get(size-3)),
+                         String.format("%.2f", plusDMList.get(size-2)),
+                         String.format("%.2f", plusDMList.get(size-1)));
+                log.debug("[ADX-DEBUG] 最近5个-DM: [{}, {}, {}, {}, {}]",
+                         String.format("%.2f", minusDMList.get(size-5)),
+                         String.format("%.2f", minusDMList.get(size-4)),
+                         String.format("%.2f", minusDMList.get(size-3)),
+                         String.format("%.2f", minusDMList.get(size-2)),
+                         String.format("%.2f", minusDMList.get(size-1)));
+            }
             
             if (smoothedTR == 0) {
-                log.warn("平滑后的真实波幅为0，无法计算ADX");
-                return new ADXResult(0.0, 0.0, 0.0, TrendDirection.NEUTRAL);
+                log.warn("平滑后的真实波幅为0，无法计算+DI/-DI");
+                return new ADXResult(adx, 0.0, 0.0, TrendDirection.NEUTRAL);
             }
             
-            // 计算+DI和-DI (Directional Indicators)
             double plusDI = (smoothedPlusDM / smoothedTR) * 100;
             double minusDI = (smoothedMinusDM / smoothedTR) * 100;
             
-            // 计算DX (Directional Index)
-            double diDiff = Math.abs(plusDI - minusDI);
-            double diSum = plusDI + minusDI;
+            // 🔥 调试：打印平滑后的值
+            log.debug("[ADX-DEBUG] 平滑后 - +DM: {}, -DM: {}, TR: {}, +DI: {}, -DI: {}",
+                     String.format("%.2f", smoothedPlusDM),
+                     String.format("%.2f", smoothedMinusDM),
+                     String.format("%.2f", smoothedTR),
+                     String.format("%.2f", plusDI),
+                     String.format("%.2f", minusDI));
             
-            if (diSum == 0) {
-                return new ADXResult(0.0, plusDI, minusDI, TrendDirection.NEUTRAL);
-            }
-            
-            double dx = (diDiff / diSum) * 100;
-            
-            // 🔥 P0修复: 判断趋势方向
+            // 5. 判断趋势方向
             TrendDirection direction;
             double diDiffPercent = Math.abs(plusDI - minusDI) / Math.max(plusDI, minusDI) * 100;
             
@@ -170,20 +229,41 @@ public class ADXCalculator implements TechnicalIndicator<Double> {
             }
             
             log.debug("[ADX] ADX={}, +DI={}, -DI={}, 趋势={}", 
-                     String.format("%.2f", dx),
+                     String.format("%.2f", adx),
                      String.format("%.2f", plusDI),
                      String.format("%.2f", minusDI),
                      direction);
             
-            // ADX是DX的移动平均
-            // 简化版本：直接返回DX作为ADX的近似值
-            // 完整版本需要对DX序列进行移动平均
-            return new ADXResult(dx, plusDI, minusDI, direction);
+            return new ADXResult(adx, plusDI, minusDI, direction);
             
         } catch (Exception e) {
             log.error("计算ADX时发生错误", e);
             return null;
         }
+    }
+    
+    /**
+     * 🔥 新增方法：计算指定窗口的平滑值
+     */
+    private double calculateSmoothedForWindow(List<Double> values, int start, int end) {
+        if (end - start < period) {
+            return 0.0;
+        }
+        
+        // 第一个平滑值是简单平均
+        double sum = 0.0;
+        for (int i = start; i < start + period && i < end; i++) {
+            sum += values.get(i);
+        }
+        
+        double smoothed = sum / period;
+        
+        // 后续使用Wilder's Smoothing
+        for (int i = start + period; i < end; i++) {
+            smoothed = ((smoothed * (period - 1)) + values.get(i)) / period;
+        }
+        
+        return smoothed;
     }
     
     /**

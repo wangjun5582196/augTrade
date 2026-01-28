@@ -66,19 +66,29 @@ public class ATRCalculator implements TechnicalIndicator<Double> {
                 trList.add(tr);
             }
             
-            // 计算ATR（TR的简单移动平均）
+            // 🔥 P1修复-20260128: 使用Wilder's Smoothing计算ATR
+            // Bug修复：之前使用简单移动平均，导致ATR波动过大
             if (trList.size() < period) {
                 log.warn("ATR计算失败：TR数据不足（需要{}个，实际{}个）", period, trList.size());
                 return null;
             }
             
-            // 取最近N个TR计算平均值
+            // 第一个ATR：简单平均
             BigDecimal sum = BigDecimal.ZERO;
-            for (int i = trList.size() - period; i < trList.size(); i++) {
+            for (int i = 0; i < period; i++) {
                 sum = sum.add(trList.get(i));
             }
-            
             BigDecimal atr = sum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
+            
+            // 后续ATR：Wilder's Smoothing
+            // ATR = (prevATR * (period-1) + currentTR) / period
+            for (int i = period; i < trList.size(); i++) {
+                BigDecimal prevATR = atr;
+                BigDecimal currentTR = trList.get(i);
+                atr = prevATR.multiply(BigDecimal.valueOf(period - 1))
+                        .add(currentTR)
+                        .divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
+            }
             
             log.debug("ATR计算完成: {} (周期: {})", atr.doubleValue(), period);
             return atr.doubleValue();

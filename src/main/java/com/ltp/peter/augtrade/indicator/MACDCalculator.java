@@ -64,9 +64,11 @@ public class MACDCalculator implements TechnicalIndicator<MACDResult> {
             // 计算MACD线
             double macdLine = fastEMA - slowEMA;
             
-            // 计算信号线（MACD的EMA）
-            // 简化版：使用最近的MACD值计算
-            double signalLine = macdLine * 0.9; // 简化计算
+            // 🔥 P0修复-20260128: 计算信号线（MACD的EMA）
+            // Bug修复：之前使用macdLine * 0.9，完全错误！
+            // 正确方法：计算MACD历史值，然后计算其EMA
+            List<Double> macdHistory = calculateMACDHistory(closePrices);
+            double signalLine = calculateEMA(macdHistory, signalPeriod);
             
             // 计算柱状图
             double histogram = macdLine - signalLine;
@@ -81,6 +83,23 @@ public class MACDCalculator implements TechnicalIndicator<MACDResult> {
             log.error("计算MACD时发生错误", e);
             return null;
         }
+    }
+    
+    /**
+     * 🔥 新增方法：计算MACD历史值序列
+     */
+    private List<Double> calculateMACDHistory(List<Double> prices) {
+        List<Double> macdValues = new ArrayList<>();
+        
+        // 需要至少slowPeriod个价格才能开始计算MACD
+        for (int i = slowPeriod - 1; i < prices.size(); i++) {
+            List<Double> subPrices = prices.subList(0, i + 1);
+            double fastEMA = calculateEMA(subPrices, fastPeriod);
+            double slowEMA = calculateEMA(subPrices, slowPeriod);
+            macdValues.add(fastEMA - slowEMA);
+        }
+        
+        return macdValues;
     }
     
     /**
