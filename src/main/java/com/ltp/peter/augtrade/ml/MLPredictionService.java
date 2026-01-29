@@ -1,7 +1,10 @@
 package com.ltp.peter.augtrade.ml;
 
 import com.ltp.peter.augtrade.entity.Kline;
+import com.ltp.peter.augtrade.indicator.ADXCalculator;
 import com.ltp.peter.augtrade.indicator.IndicatorService;
+import com.ltp.peter.augtrade.indicator.MACDCalculator;
+import com.ltp.peter.augtrade.indicator.MACDResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -25,6 +28,12 @@ public class MLPredictionService {
     
     @Autowired
     private IndicatorService indicatorService;
+    
+    @Autowired
+    private MACDCalculator macdCalculator;
+    
+    @Autowired
+    private ADXCalculator adxCalculator;
     
     /**
      * 预测市场走势
@@ -114,8 +123,11 @@ public class MLPredictionService {
         features.add((williamsR.doubleValue() + 50) / 50.0); // 标准化到-1到1
         
         // 特征10: MACD
-        BigDecimal[] macd = indicatorService.calculateMACD(klines, 12, 26, 9);
-        double macdValue = macd[0].doubleValue() / currentPrice.doubleValue();
+        MACDResult macdResult = macdCalculator.calculate(klines);
+        double macdValue = 0.0;
+        if (macdResult != null) {
+            macdValue = macdResult.getMacdLine() / currentPrice.doubleValue();
+        }
         features.add(macdValue);
         
         // 特征11: ATR (波动率)
@@ -159,8 +171,12 @@ public class MLPredictionService {
         features.add((stoch[0].doubleValue() - 50) / 50.0);
         
         // 特征15: 趋势强度（ADX）
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
-        features.add(adx.doubleValue() / 100.0);
+        Double adx = adxCalculator.calculate(klines);
+        if (adx != null) {
+            features.add(adx / 100.0);
+        } else {
+            features.add(0.0);
+        }
         
         return features.stream().mapToDouble(Double::doubleValue).toArray();
     }

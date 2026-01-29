@@ -1,6 +1,7 @@
 package com.ltp.peter.augtrade.strategy;
 
 import com.ltp.peter.augtrade.entity.Kline;
+import com.ltp.peter.augtrade.indicator.ADXCalculator;
 import com.ltp.peter.augtrade.indicator.IndicatorService;
 import com.ltp.peter.augtrade.market.MarketDataService;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,9 @@ public class SimplifiedTrendStrategy {
     @Autowired
     private MarketDataService marketDataService;
     
+    @Autowired
+    private ADXCalculator adxCalculator;
+    
     public enum Signal {
         BUY,    // 买入信号
         SELL,   // 卖出信号
@@ -74,7 +78,8 @@ public class SimplifiedTrendStrategy {
         // ==========================================
         // 步骤1: 计算核心指标
         // ==========================================
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         BigDecimal atr = indicatorService.calculateATR(klines, 14);
         BigDecimal ema20 = indicatorService.calculateEMA(klines, 20);
         BigDecimal ema50 = indicatorService.calculateEMA(klines, 50);
@@ -255,7 +260,8 @@ public class SimplifiedTrendStrategy {
      * @return 市场状态字符串
      */
     public String getMarketRegime(List<Kline> klines) {
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         BigDecimal ema20 = indicatorService.calculateEMA(klines, 20);
         BigDecimal ema50 = indicatorService.calculateEMA(klines, 50);
         
@@ -281,7 +287,8 @@ public class SimplifiedTrendStrategy {
      * @return 信号强度（0-100）
      */
     public int getSignalStrength(List<Kline> klines) {
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         
         // 简单映射：ADX直接转换为信号强度
         // ADX 20 → 强度 50
@@ -329,7 +336,8 @@ public class SimplifiedTrendStrategy {
             return "无交易信号";
         }
         
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         BigDecimal ema20 = indicatorService.calculateEMA(klines, 20);
         BigDecimal ema50 = indicatorService.calculateEMA(klines, 50);
         BigDecimal currentPrice = klines.get(0).getClosePrice();

@@ -55,7 +55,13 @@ public class IndicatorService {
     }
     
     /**
-     * 计算相对强弱指标(RSI)
+     * 计算相对强弱指标(RSI) - 简化版本
+     * 
+     * ⚠️ 注意：此方法使用简单平均（SMA），标准RSI使用Wilder's Smoothing
+     * 对于严格的RSI计算，建议使用 RSICalculator
+     * 
+     * 公式：RSI = 100 - 100 / (1 + RS)
+     * 其中：RS = 平均涨幅 / 平均跌幅
      */
     public BigDecimal calculateRSI(List<Kline> klines, int period) {
         if (klines == null || klines.size() < period + 1) {
@@ -65,6 +71,7 @@ public class IndicatorService {
         BigDecimal gains = BigDecimal.ZERO;
         BigDecimal losses = BigDecimal.ZERO;
         
+        // 计算涨跌幅
         for (int i = 0; i < period; i++) {
             BigDecimal change = klines.get(i).getClosePrice()
                     .subtract(klines.get(i + 1).getClosePrice());
@@ -80,6 +87,7 @@ public class IndicatorService {
             return BigDecimal.valueOf(100);
         }
         
+        // 使用简单平均（SMA），非Wilder's Smoothing
         BigDecimal avgGain = gains.divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
         BigDecimal avgLoss = losses.divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
         BigDecimal rs = avgGain.divide(avgLoss, 4, RoundingMode.HALF_UP);
@@ -87,31 +95,10 @@ public class IndicatorService {
         BigDecimal rsi = BigDecimal.valueOf(100)
                 .subtract(BigDecimal.valueOf(100).divide(BigDecimal.ONE.add(rs), 2, RoundingMode.HALF_UP));
         
-        log.debug("RSI({}) = {}", period, rsi);
+        log.debug("[IndicatorService] RSI({}) = {} (简化版本-SMA)", period, rsi);
         return rsi;
     }
     
-    /**
-     * 计算MACD指标
-     * @return [MACD, Signal, Histogram]
-     */
-    public BigDecimal[] calculateMACD(List<Kline> klines, int fastPeriod, int slowPeriod, int signalPeriod) {
-        if (klines == null || klines.size() < slowPeriod) {
-            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
-        }
-        
-        BigDecimal fastEMA = calculateEMA(klines, fastPeriod);
-        BigDecimal slowEMA = calculateEMA(klines, slowPeriod);
-        BigDecimal macd = fastEMA.subtract(slowEMA);
-        
-        // 简化的Signal线计算
-        List<Kline> recentKlines = klines.subList(0, Math.min(signalPeriod, klines.size()));
-        BigDecimal signal = calculateEMA(recentKlines, signalPeriod);
-        BigDecimal histogram = macd.subtract(signal);
-        
-        log.debug("MACD = {}, Signal = {}, Histogram = {}", macd, signal, histogram);
-        return new BigDecimal[]{macd, signal, histogram};
-    }
     
     /**
      * 计算布林带
@@ -265,74 +252,6 @@ public class IndicatorService {
         return new BigDecimal[]{percentK, percentD};
     }
     
-    /**
-     * ADX - 平均趋向指标 (Average Directional Index)
-     * 衡量趋势强度，不管方向
-     * >25 = 强趋势，<20 = 弱趋势/震荡
-     * 这是最重要的趋势强度指标
-     */
-    public BigDecimal calculateADX(List<Kline> klines, int period) {
-        if (klines == null || klines.size() < period + 1) {
-            return BigDecimal.ZERO;
-        }
-        
-        List<BigDecimal> plusDM = new ArrayList<>();
-        List<BigDecimal> minusDM = new ArrayList<>();
-        List<BigDecimal> trueRanges = new ArrayList<>();
-        
-        for (int i = 0; i < period; i++) {
-            Kline current = klines.get(i);
-            Kline previous = klines.get(i + 1);
-            
-            BigDecimal highDiff = current.getHighPrice().subtract(previous.getHighPrice());
-            BigDecimal lowDiff = previous.getLowPrice().subtract(current.getLowPrice());
-            
-            // +DM and -DM
-            BigDecimal plusDMValue = (highDiff.compareTo(lowDiff) > 0 && highDiff.compareTo(BigDecimal.ZERO) > 0) 
-                    ? highDiff : BigDecimal.ZERO;
-            BigDecimal minusDMValue = (lowDiff.compareTo(highDiff) > 0 && lowDiff.compareTo(BigDecimal.ZERO) > 0) 
-                    ? lowDiff : BigDecimal.ZERO;
-            
-            plusDM.add(plusDMValue);
-            minusDM.add(minusDMValue);
-            
-            // True Range
-            BigDecimal hl = current.getHighPrice().subtract(current.getLowPrice());
-            BigDecimal hpc = current.getHighPrice().subtract(previous.getClosePrice()).abs();
-            BigDecimal lpc = current.getLowPrice().subtract(previous.getClosePrice()).abs();
-            trueRanges.add(hl.max(hpc).max(lpc));
-        }
-        
-        // 计算平均值
-        BigDecimal avgPlusDM = plusDM.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
-        BigDecimal avgMinusDM = minusDM.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
-        BigDecimal avgTR = trueRanges.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), 4, RoundingMode.HALF_UP);
-        
-        if (avgTR.compareTo(BigDecimal.ZERO) == 0) {
-            return BigDecimal.ZERO;
-        }
-        
-        // +DI and -DI
-        BigDecimal plusDI = avgPlusDM.divide(avgTR, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-        BigDecimal minusDI = avgMinusDM.divide(avgTR, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-        
-        // DX = 100 * |+DI - -DI| / |+DI + -DI|
-        BigDecimal diDiff = plusDI.subtract(minusDI).abs();
-        BigDecimal diSum = plusDI.add(minusDI);
-        
-        BigDecimal adx;
-        if (diSum.compareTo(BigDecimal.ZERO) == 0) {
-            adx = BigDecimal.ZERO;
-        } else {
-            adx = diDiff.divide(diSum, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-        }
-        
-        log.debug("ADX({}) = {}, +DI = {}, -DI = {}", period, adx, plusDI, minusDI);
-        return adx;
-    }
     
     /**
      * CCI - 商品通道指标 (Commodity Channel Index)

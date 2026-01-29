@@ -5,6 +5,8 @@ import com.ltp.peter.augtrade.entity.BacktestResult;
 import com.ltp.peter.augtrade.entity.BacktestTrade;
 import com.ltp.peter.augtrade.entity.Kline;
 import com.ltp.peter.augtrade.indicator.IndicatorService;
+import com.ltp.peter.augtrade.indicator.MACDCalculator;
+import com.ltp.peter.augtrade.indicator.MACDResult;
 import com.ltp.peter.augtrade.mapper.BacktestResultMapper;
 import com.ltp.peter.augtrade.mapper.BacktestTradeMapper;
 import com.ltp.peter.augtrade.mapper.KlineMapper;
@@ -41,6 +43,12 @@ public class BacktestService {
     
     @Autowired
     private IndicatorService indicatorService;
+    
+    @Autowired
+    private MACDCalculator macdCalculator;
+    
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.ADXCalculator adxCalculator;
     
     @Autowired
     private com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator strategyOrchestrator;
@@ -595,11 +603,22 @@ public class BacktestService {
     
     /**
      * 为回测计算技术指标
+     * 
+     * 🔥 修复-20260129：添加ADX计算，避免"ADX数据缺失"错误
      */
     private void calculateIndicatorsForBacktest(com.ltp.peter.augtrade.strategy.core.MarketContext context) {
         List<Kline> klines = context.getKlines();
         
         try {
+            // ADX - 🔥 重要：CompositeStrategy依赖ADX进行市场环境判断
+            double adx = adxCalculator.calculate(klines);
+            if (adx > 0) {
+                context.addIndicator("ADX", adx);
+                log.debug("回测ADX计算完成: {}", adx);
+            } else {
+                log.warn("⚠️ ADX计算返回0或负值，可能导致策略拒绝交易");
+            }
+            
             // RSI
             BigDecimal rsi = indicatorService.calculateRSI(klines, 14);
             if (rsi != null) {
@@ -613,14 +632,8 @@ public class BacktestService {
             }
             
             // MACD
-            BigDecimal[] macd = indicatorService.calculateMACD(klines, 12, 26, 9);
-            if (macd != null && macd.length >= 3) {
-                com.ltp.peter.augtrade.indicator.MACDResult macdResult = 
-                    com.ltp.peter.augtrade.indicator.MACDResult.builder()
-                        .macdLine(macd[0].doubleValue())
-                        .signalLine(macd[1].doubleValue())
-                        .histogram(macd[2].doubleValue())
-                        .build();
+            MACDResult macdResult = macdCalculator.calculate(klines);
+            if (macdResult != null) {
                 context.addIndicator("MACD", macdResult);
             }
             
@@ -687,7 +700,7 @@ public class BacktestService {
             BigDecimal sma10 = indicatorService.calculateSMA(klines, 10);
             BigDecimal sma20 = indicatorService.calculateSMA(klines, 20);
             BigDecimal rsi = indicatorService.calculateRSI(klines, 14);
-            BigDecimal[] macd = indicatorService.calculateMACD(klines, 12, 26, 9);
+            MACDResult macdResult = macdCalculator.calculate(klines);
             
             int buySignals = 0;
             int sellSignals = 0;
@@ -696,13 +709,13 @@ public class BacktestService {
             if (sma5.compareTo(sma10) > 0 && sma10.compareTo(sma20) > 0) buySignals++;
             if (indicatorService.isGoldenCross(klines, 5, 10)) buySignals++;
             if (rsi.compareTo(BigDecimal.valueOf(40)) < 0) buySignals++;  // 放宽到40
-            if (macd[2].compareTo(BigDecimal.ZERO) > 0) buySignals++;  // 只要柱状图为正即可
+            if (macdResult != null && macdResult.getHistogram() > 0) buySignals++;  // 只要柱状图为正即可
             
             // 卖出信号 (降低门槛)
             if (sma5.compareTo(sma10) < 0 && sma10.compareTo(sma20) < 0) sellSignals++;
             if (indicatorService.isDeathCross(klines, 5, 10)) sellSignals++;
             if (rsi.compareTo(BigDecimal.valueOf(60)) > 0) sellSignals++;  // 放宽到60
-            if (macd[2].compareTo(BigDecimal.ZERO) < 0) sellSignals++;  // 只要柱状图为负即可
+            if (macdResult != null && macdResult.getHistogram() < 0) sellSignals++;  // 只要柱状图为负即可
             
             // 降低触发门槛：1个信号即可触发
             if (buySignals >= 1 && sellSignals == 0) {

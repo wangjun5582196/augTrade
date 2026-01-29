@@ -125,30 +125,33 @@ public class CompositeStrategy implements Strategy {
                 log.info("[{}] 📊 K线形态加权后 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
             }
             
-            // 🔥 Step 2：ADX过滤（基于121笔数据分析）
-            // 数据显示：ADX≥30平均盈利$43.87，ADX 20-30平均亏损$22.68
+            // 🔥 Step 2：ADX过滤（2026-01-28调整）
+            // ⚠️ 重要：历史数据的ADX可能是错误的（用DX而非ADX计算），所以之前的ADX≥30门槛过于严格
+            // 调整策略：
+            // - 正常情况：ADX≥18（真实ADX的合理门槛）
+            // - 强K线形态：ADX≥12（给予更多灵活性）
             if (adx != null) {
-                // 🎯 K线形态强烈时，降低ADX门槛到15
+                // 🎯 K线形态强烈时，降低ADX门槛
                 boolean hasStrongPattern = pattern != null && pattern.getStrength() >= 8;
-                double adxThreshold = hasStrongPattern ? 15.0 : 30.0;
+                double adxThreshold = hasStrongPattern ? 12.0 : 18.0;
                 
                 if (adx < adxThreshold) {
                     if (hasStrongPattern) {
-                        log.warn("[{}] ⚠️ 虽有强烈K线形态，但ADX={} < 15，仍需观望", 
+                        log.warn("[{}] ⚠️ 虽有强烈K线形态，但ADX={} < 12（趋势过弱），需观望", 
                                 STRATEGY_NAME, String.format("%.2f", adx));
                     } else {
-                        log.error("[{}] ❌ ADX过滤！ADX={} < 30，不是强趋势（数据显示ADX 20-30亏损$22.68/笔）", 
+                        log.error("[{}] ❌ ADX过滤！ADX={} < 18（弱趋势/震荡期，避免无效交易）", 
                                 STRATEGY_NAME, String.format("%.2f", adx));
                     }
                     log.error("[{}] 📊 当前评分 - 做多:{}, 做空:{} 被拒绝", 
                             STRATEGY_NAME, buyScore, sellScore);
-                    return createHoldSignal(String.format("❌ ADX=%.2f < %.0f（需要强趋势）", adx, adxThreshold), 
+                    return createHoldSignal(String.format("❌ ADX=%.2f < %.0f（需要明确趋势）", adx, adxThreshold), 
                             buyScore, sellScore);
                 }
                 
-                log.info("[{}] ✅ 强趋势确认(ADX={}≥{}),使用正常阈值(做多:{}, 做空:{})", 
+                log.info("[{}] ✅ 趋势确认(ADX={}≥{}),使用正常阈值(做多:{}, 做空:{})", 
                         STRATEGY_NAME, String.format("%.2f", adx), 
-                        hasStrongPattern ? "15" : "30", buyScore, sellScore);
+                        hasStrongPattern ? "12" : "18", buyScore, sellScore);
             } else {
                 log.warn("[{}] ⚠️ ADX数据缺失，暂停交易以确保安全", STRATEGY_NAME);
                 return createHoldSignal("ADX数据缺失，暂停交易", buyScore, sellScore);
@@ -156,8 +159,10 @@ public class CompositeStrategy implements Strategy {
             
             // 根据得分生成信号
             if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                // 🔥 ML震荡过滤器 (2026-01-27新增，震荡精确率94%)
-                // ⚠️ 重要：ML过滤放在最前面，作为第一道防线
+                // 🔥 ML震荡过滤器 - 临时禁用 (2026-01-29)
+                // 原因：ML模型98.74%置信度将ADX=56.4的强趋势误判为震荡，导致无法开单
+                // TODO: 需要重新评估ML模型或调整过滤逻辑
+                /*
                 if (mlPredictionService != null) {
                     try {
                         MLPrediction mlPred = mlPredictionService.predict(context);
@@ -201,6 +206,8 @@ public class CompositeStrategy implements Strategy {
                         log.error("[{}] ML预测异常，继续使用传统策略", STRATEGY_NAME, e);
                     }
                 }
+                */
+                log.info("[{}] ℹ️ ML过滤器已禁用，使用传统技术指标策略", STRATEGY_NAME);
                 
                 TradingSignal buySignal = TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
@@ -433,14 +440,15 @@ public class CompositeStrategy implements Strategy {
         double priceVal = price.doubleValue();
         
         if (signal.getType() == TradingSignal.SignalType.BUY) {
-            // 做多: 价格不能高于布林上轨
-            if (priceVal > upper) {
-                double exceeds = priceVal - upper;
-                log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于布林上轨{} (+{} USD)", 
-                        STRATEGY_NAME, 
-                        String.format("%.2f", priceVal), 
-                        String.format("%.2f", upper), 
-                        String.format("%.2f", exceeds));
+            // 做多: 价格不能高于布林上轨超过5%
+            // 🔥 修复-20260129：允许5%溢价，因为强趋势中价格沿上轨运行是正常现象
+            // 修复前：price > upper 就拒绝（0%溢价）
+            // 问题：错过强趋势行情（如当前ADX=44，价格超出上轨3.74%）
+            // 修复后：允许5%溢价，仍保护极端情况
+            if (priceVal > upper * 1.05) {
+                double exceedsPercent = (priceVal - upper) / upper * 100;
+                log.warn("[{}] ⛔ BUY信号被过滤: 价格高于布林上轨{:.2f}%（限制5%）", 
+                        STRATEGY_NAME, exceedsPercent);
                 return false;
             }
         } else if (signal.getType() == TradingSignal.SignalType.SELL) {

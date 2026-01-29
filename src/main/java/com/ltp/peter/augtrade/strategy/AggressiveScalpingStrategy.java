@@ -1,7 +1,10 @@
 package com.ltp.peter.augtrade.strategy;
 
 import com.ltp.peter.augtrade.entity.Kline;
+import com.ltp.peter.augtrade.indicator.ADXCalculator;
 import com.ltp.peter.augtrade.indicator.IndicatorService;
+import com.ltp.peter.augtrade.indicator.MACDCalculator;
+import com.ltp.peter.augtrade.indicator.MACDResult;
 import com.ltp.peter.augtrade.market.MarketDataService;
 import com.ltp.peter.augtrade.ml.MLPredictionService;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +39,12 @@ public class AggressiveScalpingStrategy {
     
     @Autowired
     private MLPredictionService mlPredictionService;
+    
+    @Autowired
+    private MACDCalculator macdCalculator;
+    
+    @Autowired
+    private ADXCalculator adxCalculator;
     
     public enum Signal {
         BUY, SELL, HOLD
@@ -142,7 +151,8 @@ public class AggressiveScalpingStrategy {
         }
         
         BigDecimal williamsR = indicatorService.calculateWilliamsR(klines, 14);
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         
         // ML预测作为辅助（阈值放宽）
         double mlPrediction = mlPredictionService.predictMarketDirection(klines);
@@ -239,15 +249,21 @@ public class AggressiveScalpingStrategy {
         }
         
         // 计算MACD
-        BigDecimal[] macd = indicatorService.calculateMACD(klines, 12, 26, 9);
-        BigDecimal macdLine = macd[0];
-        BigDecimal signalLine = macd[1];
-        BigDecimal histogram = macd[2];
+        MACDResult macdResult = macdCalculator.calculate(klines);
+        if (macdResult == null) {
+            return Signal.HOLD;
+        }
+        BigDecimal macdLine = BigDecimal.valueOf(macdResult.getMacdLine());
+        BigDecimal signalLine = BigDecimal.valueOf(macdResult.getSignalLine());
+        BigDecimal histogram = BigDecimal.valueOf(macdResult.getHistogram());
         
         // 获取前一根K线的MACD
         List<Kline> prevKlines = klines.subList(1, klines.size());
-        BigDecimal[] prevMacd = indicatorService.calculateMACD(prevKlines, 12, 26, 9);
-        BigDecimal prevHistogram = prevMacd[2];
+        MACDResult prevMacdResult = macdCalculator.calculate(prevKlines);
+        if (prevMacdResult == null) {
+            return Signal.HOLD;
+        }
+        BigDecimal prevHistogram = BigDecimal.valueOf(prevMacdResult.getHistogram());
         
         log.info("📊 MACD: {}, Signal: {}, Histogram: {}", macdLine, signalLine, histogram);
         
@@ -442,7 +458,8 @@ public class AggressiveScalpingStrategy {
         // 获取所有指标
         BigDecimal williamsR = indicatorService.calculateWilliamsR(klines, 14);
         BigDecimal rsi = indicatorService.calculateRSI(klines, 14);
-        BigDecimal adx = indicatorService.calculateADX(klines, 14);
+        Double adxDouble = adxCalculator.calculate(klines);
+        BigDecimal adx = adxDouble != null ? BigDecimal.valueOf(adxDouble) : BigDecimal.ZERO;
         BigDecimal atr = indicatorService.calculateATR(klines, 14);
         double mlPrediction = mlPredictionService.predictMarketDirection(klines);
         

@@ -91,30 +91,37 @@ public class MarketRegimeDetector {
     
     /**
      * 根据指标对市场环境进行分类
+     * 
+     * 🔥 修复-20260129：优先基于ADX判断，避免将高ADX误判为盘整
+     * 核心逻辑：ADX是最可靠的趋势指标，应该作为主要判断依据
      */
     private MarketRegime classifyRegime(double adx, double volatility, double trendConsistency) {
-        // 强趋势：ADX > 35 且波动率较高 且趋势一致性高
-        if (adx > 35 && volatility > 0.015 && trendConsistency > 0.6) {
+        // 强趋势：ADX > 35（无论波动率高低）
+        // 修复前：要求 ADX>35 AND 波动率>1.5% AND 一致性>60%
+        // 问题：平稳上涨趋势（低波动+高ADX）会被误判为盘整
+        // 修复后：只要ADX>35就是强趋势，波动率只用于进一步分类
+        if (adx > 35) {
+            if (volatility > 0.020) {
+                log.debug("🔥 强趋势-高波动型（激烈行情）");
+            } else {
+                log.debug("📈 强趋势-平稳型（稳步单边）");
+            }
             return MarketRegime.STRONG_TREND;
         }
         
-        // 弱趋势：ADX > 25 且有一定波动
-        if (adx > 25 && volatility > 0.010) {
+        // 中等趋势：ADX 20-35
+        // ADX>20表示有明确的方向性运动，应该识别为趋势
+        if (adx > 20) {
             return MarketRegime.WEAK_TREND;
         }
         
-        // 震荡：ADX < 20 且波动率高（无方向的大幅波动）
-        if (adx < 20 && volatility > 0.015) {
-            return MarketRegime.CHOPPY;
+        // 无明确趋势：ADX < 20
+        // 此时根据波动率区分震荡和盘整
+        if (volatility > 0.015) {
+            return MarketRegime.CHOPPY;        // 高波动无方向 = 震荡
+        } else {
+            return MarketRegime.CONSOLIDATION;  // 低波动无方向 = 盘整
         }
-        
-        // 盘整：ADX < 20 且波动率低
-        if (adx < 20 && volatility < 0.010) {
-            return MarketRegime.CONSOLIDATION;
-        }
-        
-        // 默认盘整
-        return MarketRegime.CONSOLIDATION;
     }
     
     /**
