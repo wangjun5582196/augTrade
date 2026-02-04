@@ -91,7 +91,7 @@ bybit:
     atr-take-profit-multiplier: 4.0         # 🔥 P0修复-20260121：从2.0提高到4.0，让利润奔跑
     atr-period: 14                          # ATR计算周期
     atr-min-threshold: 1.0                  # 🔥 P0修复-20260119：从2.5降到1.0，黄金正常波动范围（ATR通常1.0-3.0）
-    atr-max-threshold: 6.0                  # 🔥 P0修复-20260121：从8.0降到6.0，高波动期停止交易
+    atr-max-threshold: 15.0                 # 🔥 P0修复-20260129：从6.0提高到15.0，适应当前高波动市场（ATR=11.99）
 
 # 交易平台配置
 trading:
