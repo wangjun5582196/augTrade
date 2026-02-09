@@ -79,6 +79,9 @@ public class TradingScheduler {
     @Autowired
     private IndicatorService indicatorService;
     
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.EMACalculator emaCalculator;
+    
     @Value("${trading.gold.symbol:XAUUSD}")
     private String symbol;
     
@@ -130,14 +133,20 @@ public class TradingScheduler {
     @Value("${bybit.risk.atr-max-threshold:15.0}")
     private double atrMaxThreshold;
     
-    // 冷却期控制 - 所有平仓类型都需要冷却
+    // 🔥 P1修复-20260209: 冷却期从5分钟延长到10分钟
+    // 数据分析：今日16笔交易平均22分钟一笔，#374→#375→#376连续追高间隔仅7分钟
     private LocalDateTime lastCloseTime = null;
-    private static final int CLOSE_COOLDOWN_SECONDS = 300; // 300秒冷却（5分钟）- 防止止损后立即开仓
+    private static final int CLOSE_COOLDOWN_SECONDS = 600; // 🔥 从300秒→600秒（10分钟）- 大幅减少频繁交易
     
-    // 🔥 P0修复-20260115: 每日交易次数限制
-    private static final int MAX_DAILY_TRADES = 50;  // 每日最大8笔交易
+    // 🔥 P1修复-20260209: 每日交易次数限制从50降至20
+    // 数据分析：今日6小时16笔过度交易，多数是追高止损的无效交易
+    private static final int MAX_DAILY_TRADES = 20;  // 🔥 从50降至20笔/天
     private LocalDateTime dailyTradeResetTime = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
     private int dailyTradeCount = 0;
+    
+    // 🔥 P1修复-20260209: 最后一次开仓时间（用于最小开仓间隔控制）
+    private LocalDateTime lastOpenTime = null;
+    private static final int MIN_OPEN_INTERVAL_SECONDS = 1800; // 🔥 最小开仓间隔30分钟
     
     // 持仓时间管理常量 - ✨ 优化：增加持仓保护期，避免过早平仓
     private static final int MAX_HOLDING_SECONDS = 1800; // 最大持仓30分钟
@@ -434,6 +443,28 @@ public class TradingScheduler {
                 }
             }
             
+            // 🔥 P1修复-20260209：最小开仓间隔检查（防止频繁连续开仓）
+            if (lastOpenTime != null) {
+                long secondsSinceLastOpen = Duration.between(lastOpenTime, LocalDateTime.now()).getSeconds();
+                if (secondsSinceLastOpen < MIN_OPEN_INTERVAL_SECONDS) {
+                    log.info("⏸️ 距离上次开仓仅{}秒（需要≥{}秒），防止连续追高开仓", 
+                            secondsSinceLastOpen, MIN_OPEN_INTERVAL_SECONDS);
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
+            // 🔥 P1修复-20260209：趋势反转检测（EMA死叉=停止做多）
+            // 数据分析：#378大亏$242的根因是14:00后趋势由上转下未识别
+            // 当EMA20下穿EMA50时（死叉），禁止做多
+            if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+                if (detectTrendReversal(bybitSymbol)) {
+                    log.warn("🚨 检测到趋势反转（EMA死叉），禁止做多！等待趋势明确");
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
             // 🔥 P0修复：添加震荡市识别
             MarketRegime regime = detectMarketRegime(bybitSymbol);
             int requiredStrength = calculateRequiredStrength(regime, tradingSignal);
@@ -450,6 +481,7 @@ public class TradingScheduler {
                     boolean success = executeBybitBuy(currentPrice);
                     if (success) {
                         dailyTradeCount++;
+                        lastOpenTime = LocalDateTime.now(); // 🔥 P1修复-20260209: 记录开仓时间
                         log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
                     }
                 }
@@ -468,6 +500,7 @@ public class TradingScheduler {
                     boolean success = executeBybitSell(currentPrice);
                     if (success) {
                         dailyTradeCount++;
+                        lastOpenTime = LocalDateTime.now(); // 🔥 P1修复-20260209: 记录开仓时间
                         log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
                     }
                 }
@@ -1195,6 +1228,53 @@ public class TradingScheduler {
         }
         
         return baseStrength;
+    }
+    
+    /**
+     * 🔥 P1修复-20260209：趋势反转检测
+     * 检测EMA死叉（EMA20下穿EMA50），当检测到时禁止做多
+     * 
+     * @param symbol 交易品种
+     * @return true=检测到趋势反转（死叉），false=趋势正常
+     */
+    private boolean detectTrendReversal(String symbol) {
+        try {
+            java.util.List<Kline> klines = marketDataService.getLatestKlines(symbol, "5m", 60);
+            if (klines == null || klines.size() < 55) {
+                return false; // 数据不足，不阻止交易
+            }
+            
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend trend = 
+                    emaCalculator.calculateTrend(klines, 20, 50);
+            
+            if (trend == null) {
+                return false;
+            }
+            
+            // 检测死叉：EMA20 < EMA50（下降趋势）
+            if (trend.isDownTrend()) {
+                log.warn("🚨 EMA死叉检测！EMA20={} < EMA50={}，趋势反转为下降", 
+                        String.format("%.2f", trend.getEmaShort()), 
+                        String.format("%.2f", trend.getEmaLong()));
+                return true;
+            }
+            
+            // 检测即将死叉：EMA20接近EMA50（差距<0.1%）
+            double emaGap = (trend.getEmaShort() - trend.getEmaLong()) / trend.getEmaLong() * 100;
+            if (emaGap > 0 && emaGap < 0.1) {
+                log.warn("⚠️ EMA即将死叉！EMA20={}, EMA50={}, 差距仅{:.3f}%", 
+                        String.format("%.2f", trend.getEmaShort()), 
+                        String.format("%.2f", trend.getEmaLong()),
+                        emaGap);
+                return true;
+            }
+            
+            return false;
+            
+        } catch (Exception e) {
+            log.error("趋势反转检测失败", e);
+            return false; // 异常时不阻止交易
+        }
     }
     
     /**

@@ -23,13 +23,18 @@ import org.springframework.stereotype.Service;
 public class WilliamsStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "Williams";
-    private static final int STRATEGY_WEIGHT = 8;
+    // 🔥 P0修复-20260209: 权重从8降至4
+    // 数据分析：信号强度越高（WR贡献大）的订单亏损越大，信号强度24的4笔反而赚$473
+    // WR超卖做多与布林带上轨追高叠加，导致系统性亏损
+    private static final int STRATEGY_WEIGHT = 4;
     
-    // 🔥 P0修复: Williams %R 阈值 - 严格化,避免高点追多
-    private static final double STRONG_OVERSOLD = -85.0;  // 从-80提高到-85,更严格
-    private static final double OVERSOLD = -70.0;         // 从-60提高到-70,避免假超卖
-    private static final double OVERBOUGHT = -35.0;       // 从-40收紧到-35
-    private static final double STRONG_OVERBOUGHT = -20.0;
+    // 🔥 P0修复-20260209: Williams %R 阈值 - 进一步严格化
+    // 数据：WR<-80（超卖区）做多的9笔中，多数是在价格已经突破布林上轨后入场
+    // 这说明WR在高波动市场中频繁给出假超卖信号
+    private static final double STRONG_OVERSOLD = -90.0;  // 🔥 从-85提高到-90，只在极端超卖时做多
+    private static final double OVERSOLD = -80.0;         // 🔥 从-70提高到-80，进一步收紧
+    private static final double OVERBOUGHT = -30.0;       // 🔥 从-35收紧到-30
+    private static final double STRONG_OVERBOUGHT = -15.0; // 🔥 从-20收紧到-15
     
     @Autowired
     private WilliamsRCalculator williamsCalculator;

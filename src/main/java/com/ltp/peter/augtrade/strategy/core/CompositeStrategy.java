@@ -335,19 +335,28 @@ public class CompositeStrategy implements Strategy {
     
     /**
      * 计算信号强度
-     * 基于主导得分和得分差距
+     * 🔥 P0修复-20260209: 重新校准信号强度计算
      * 
-     * ✨ 优化：提高倍数（×2→×3）和上限（70→80），确保TrendFilter单独信号也能达到开仓阈值
+     * 问题：原算法 dominantScore * 3 导致信号强度与盈利负相关
+     *   - 信号强度100的订单平均亏$50.5
+     *   - 信号强度24的订单平均赚$118.25
+     * 
+     * 修复：
+     *   - 降低倍数（×3→×2），避免高分策略单独就产生过强信号
+     *   - 降低上限（80→60），让信号强度更加分散
+     *   - 增加得分差距奖励，鼓励多策略一致性
      */
     private int calculateSignalStrength(int dominantScore, int oppositeScore) {
         // 得分差距
         int scoreDiff = dominantScore - oppositeScore;
         
-        // 基础强度（根据主导得分）- 提高倍数和上限
-        int baseStrength = Math.min(dominantScore * 3, 80);  // 从×2改为×3，从70改为80
+        // 🔥 基础强度降低：从×3改为×2，从80改为60
+        // 这确保单个高权重策略（如TrendFilter=12）不会产生过强信号(12*2=24而非12*3=36)
+        int baseStrength = Math.min(dominantScore * 2, 60);
         
-        // 额外强度（根据得分差距）
-        int bonusStrength = Math.min(scoreDiff, 30);
+        // 🔥 增加一致性奖励：多策略同时给出信号时，额外加分
+        // 得分差距越大说明方向越一致
+        int bonusStrength = Math.min(scoreDiff * 2, 40);
         
         return Math.min(baseStrength + bonusStrength, 100);
     }
@@ -389,12 +398,13 @@ public class CompositeStrategy implements Strategy {
     }
     
     /**
-     * 🔥 P0修复: 验证价格位置是否合理
+     * 🔥 P0修复-20260209: 验证价格位置是否合理（严格布林带过滤）
      * 
-     * 规则:
-     * - 做多: 价格不能高于布林上轨
+     * 核心改进:
+     * - 做多: 价格不能高于布林上轨（从5%溢价改为0%，数据显示13/16笔突破上轨追多大多亏损）
+     * - 做多: 理想入场区间在中轨附近（中轨±1σ范围内）
      * - 做空: 价格不能低于布林下轨
-     * - 如果无布林带,使用EMA判断(价格偏离EMA20不超过0.5%)
+     * - 如果无布林带,使用EMA判断(价格偏离EMA20不超过0.3%)
      */
     private boolean validatePricePosition(MarketContext context, TradingSignal signal) {
         if (signal.getType() == TradingSignal.SignalType.HOLD) {
@@ -416,16 +426,15 @@ public class CompositeStrategy implements Strategy {
             double emaShort = trend.getEmaShort();  // 使用emaShort (EMA20)
             
             if (signal.getType() == TradingSignal.SignalType.BUY) {
-                // 做多: 价格不能高于EMA20超过0.5%
-                if (priceVal > emaShort * 1.005) {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过0.5%", 
+                // 🔥 20260209: 做多时价格不能高于EMA20超过0.3%（从0.5%收紧）
+                if (priceVal > emaShort * 1.003) {
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过0.3%（追高保护）", 
                             STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
                     return false;
                 }
             } else if (signal.getType() == TradingSignal.SignalType.SELL) {
-                // 做空: 价格不能低于EMA20超过0.5%
-                if (priceVal < emaShort * 0.995) {
-                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过0.5%", 
+                if (priceVal < emaShort * 0.997) {
+                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过0.3%", 
                             STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
                     return false;
                 }
@@ -440,17 +449,27 @@ public class CompositeStrategy implements Strategy {
         double priceVal = price.doubleValue();
         
         if (signal.getType() == TradingSignal.SignalType.BUY) {
-            // 做多: 价格不能高于布林上轨超过5%
-            // 🔥 修复-20260129：允许5%溢价，因为强趋势中价格沿上轨运行是正常现象
-            // 修复前：price > upper 就拒绝（0%溢价）
-            // 问题：错过强趋势行情（如当前ADX=44，价格超出上轨3.74%）
-            // 修复后：允许5%溢价，仍保护极端情况
-            if (priceVal > upper * 1.05) {
+            // 🔥 P0修复-20260209：禁止在布林带上轨上方做多！
+            // 数据分析：今日13/16笔在突破上轨后做多，属于追高行为
+            // 仅3笔在中轨附近入场（#366中轨上方、#379/#380中轨下方）表现最好
+            // 修改：做多时价格必须低于布林带上轨（0%溢价，从5%改为0%）
+            if (priceVal > upper) {
                 double exceedsPercent = (priceVal - upper) / upper * 100;
-                log.warn("[{}] ⛔ BUY信号被过滤: 价格高于布林上轨{:.2f}%（限制5%）", 
-                        STRATEGY_NAME, exceedsPercent);
+                log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{:.2f}%），禁止追高！", 
+                        STRATEGY_NAME, String.format("%.2f", priceVal), 
+                        String.format("%.2f", upper), exceedsPercent);
                 return false;
             }
+            
+            // 🔥 P0修复-20260209：价格远离中轨时降低信号（理想入场在中轨附近）
+            double distFromMiddle = (priceVal - middle) / (upper - middle);
+            if (distFromMiddle > 0.8) {
+                // 价格在上轨80%以上区间，虽未突破但已偏高
+                log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{:.0f}%），信号质量降低", 
+                        STRATEGY_NAME, String.format("%.2f", priceVal), distFromMiddle * 100);
+                // 不阻止但记录警告，由信号强度调整处理
+            }
+            
         } else if (signal.getType() == TradingSignal.SignalType.SELL) {
             // 做空: 价格不能低于布林下轨
             if (priceVal < lower) {
