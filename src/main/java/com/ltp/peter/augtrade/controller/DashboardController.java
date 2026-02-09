@@ -573,6 +573,284 @@ public class DashboardController {
         return result;
     }
     
+    // ==================== 🔥 趋势判断API ====================
+    
+    /**
+     * 获取当前市场趋势判断
+     * 综合EMA趋势、ADX强度、布林带位置、价格动量等多维度判断
+     * 返回：多头趋势 / 空头趋势 / 震荡
+     */
+    @GetMapping("/trend-analysis")
+    public Map<String, Object> getTrendAnalysis() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            String symbol = "XAUTUSDT";
+            
+            if (strategyOrchestrator == null) {
+                result.put("success", false);
+                result.put("message", "策略服务未启用");
+                return result;
+            }
+            
+            // 获取市场上下文
+            com.ltp.peter.augtrade.strategy.core.MarketContext context = 
+                strategyOrchestrator.getMarketContext(symbol, 100);
+            
+            if (context == null) {
+                result.put("success", false);
+                result.put("message", "无法获取市场数据");
+                return result;
+            }
+            
+            // ====== 1. EMA趋势 ======
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend emaTrend = 
+                context.getIndicator("EMATrend");
+            
+            String emaDirection = "NEUTRAL"; // BULLISH / BEARISH / NEUTRAL
+            double emaGapPercent = 0;
+            double ema20 = 0, ema50 = 0;
+            
+            if (emaTrend != null) {
+                ema20 = emaTrend.getEmaShort();
+                ema50 = emaTrend.getEmaLong();
+                emaGapPercent = ema50 > 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
+                
+                if (emaTrend.isUpTrend()) {
+                    emaDirection = "BULLISH";
+                } else if (emaTrend.isDownTrend()) {
+                    emaDirection = "BEARISH";
+                }
+            }
+            
+            // ====== 2. ADX趋势强度 ======
+            Double adx = context.getIndicator("ADX");
+            String adxLevel = "UNKNOWN";
+            if (adx != null) {
+                if (adx >= 30) adxLevel = "STRONG";      // 强趋势
+                else if (adx >= 20) adxLevel = "MODERATE"; // 中等趋势
+                else adxLevel = "WEAK";                    // 弱/震荡
+            }
+            
+            // ====== 3. 布林带位置 ======
+            com.ltp.peter.augtrade.indicator.BollingerBands bb = 
+                context.getIndicator("BollingerBands");
+            
+            double bbPosition = 50; // 百分比位置 (0=下轨, 50=中轨, 100=上轨)
+            String bbZone = "MIDDLE";
+            
+            if (bb != null && context.getCurrentPrice() != null) {
+                double price = context.getCurrentPrice().doubleValue();
+                double range = bb.getUpper() - bb.getLower();
+                if (range > 0) {
+                    bbPosition = ((price - bb.getLower()) / range) * 100;
+                }
+                
+                if (bbPosition > 80) bbZone = "UPPER";       // 上轨区域
+                else if (bbPosition > 60) bbZone = "UPPER_MID"; // 中上区域
+                else if (bbPosition > 40) bbZone = "MIDDLE";    // 中轨区域
+                else if (bbPosition > 20) bbZone = "LOWER_MID"; // 中下区域
+                else bbZone = "LOWER";                          // 下轨区域
+            }
+            
+            // ====== 4. Williams %R 动量 ======
+            Double williamsR = context.getIndicator("WilliamsR");
+            String wrZone = "NEUTRAL";
+            if (williamsR != null) {
+                if (williamsR < -80) wrZone = "OVERSOLD";       // 超卖
+                else if (williamsR > -20) wrZone = "OVERBOUGHT"; // 超买
+                else wrZone = "NEUTRAL";
+            }
+            
+            // ====== 5. 价格与EMA的关系 ======
+            String priceVsEma = "NEUTRAL";
+            double priceEmaGap = 0;
+            if (context.getCurrentPrice() != null && ema20 > 0) {
+                double price = context.getCurrentPrice().doubleValue();
+                priceEmaGap = ((price - ema20) / ema20) * 100;
+                if (price > ema20 && price > ema50) priceVsEma = "ABOVE_BOTH";
+                else if (price < ema20 && price < ema50) priceVsEma = "BELOW_BOTH";
+                else priceVsEma = "BETWEEN";
+            }
+            
+            // ====== 综合趋势判断 ======
+            int bullScore = 0;
+            int bearScore = 0;
+            List<String> bullReasons = new ArrayList<>();
+            List<String> bearReasons = new ArrayList<>();
+            
+            // EMA金叉/死叉 (权重3)
+            if ("BULLISH".equals(emaDirection)) {
+                bullScore += 3;
+                bullReasons.add("EMA20金叉EMA50（EMA20=" + String.format("%.1f", ema20) + " > EMA50=" + String.format("%.1f", ema50) + "）");
+            } else if ("BEARISH".equals(emaDirection)) {
+                bearScore += 3;
+                bearReasons.add("EMA20死叉EMA50（EMA20=" + String.format("%.1f", ema20) + " < EMA50=" + String.format("%.1f", ema50) + "）");
+            }
+            
+            // ADX趋势强度 (权重2)
+            if ("STRONG".equals(adxLevel)) {
+                if ("BULLISH".equals(emaDirection)) {
+                    bullScore += 2;
+                    bullReasons.add("ADX=" + String.format("%.1f", adx) + "（强趋势确认）");
+                } else if ("BEARISH".equals(emaDirection)) {
+                    bearScore += 2;
+                    bearReasons.add("ADX=" + String.format("%.1f", adx) + "（强趋势确认）");
+                }
+            }
+            
+            // 价格vs EMA位置 (权重2)
+            if ("ABOVE_BOTH".equals(priceVsEma)) {
+                bullScore += 2;
+                bullReasons.add("价格在EMA20和EMA50之上");
+            } else if ("BELOW_BOTH".equals(priceVsEma)) {
+                bearScore += 2;
+                bearReasons.add("价格在EMA20和EMA50之下");
+            }
+            
+            // 布林带位置 (权重1)
+            if ("UPPER".equals(bbZone) || "UPPER_MID".equals(bbZone)) {
+                bullScore += 1;
+                bullReasons.add("价格在布林带上方区域（" + String.format("%.0f", bbPosition) + "%）");
+            } else if ("LOWER".equals(bbZone) || "LOWER_MID".equals(bbZone)) {
+                bearScore += 1;
+                bearReasons.add("价格在布林带下方区域（" + String.format("%.0f", bbPosition) + "%）");
+            }
+            
+            // Williams %R动量 (权重1)
+            if ("OVERBOUGHT".equals(wrZone)) {
+                bearScore += 1;
+                bearReasons.add("Williams %R=" + String.format("%.1f", williamsR) + "（超买区，可能回调）");
+            } else if ("OVERSOLD".equals(wrZone)) {
+                bullScore += 1;
+                bullReasons.add("Williams %R=" + String.format("%.1f", williamsR) + "（超卖区，可能反弹）");
+            }
+            
+            // 最终判断
+            String trend;       // BULLISH / BEARISH / RANGING
+            String trendLabel;  // 显示名称
+            String trendEmoji;
+            int trendStrength;  // 趋势强度 0-100
+            String trendColor;
+            List<String> reasons;
+            
+            int totalScore = bullScore + bearScore;
+            int netScore = bullScore - bearScore;
+            
+            if ("WEAK".equals(adxLevel) && Math.abs(netScore) <= 2) {
+                // ADX弱 + 多空分歧不大 = 震荡
+                trend = "RANGING";
+                trendLabel = "震荡盘整";
+                trendEmoji = "↔️";
+                trendStrength = adx != null ? (int)(adx.doubleValue() * 2) : 20;
+                trendColor = "#f59e0b"; // 黄色
+                reasons = new ArrayList<>();
+                reasons.add("ADX=" + String.format("%.1f", adx != null ? adx : 0) + "（趋势较弱）");
+                reasons.add("多空信号冲突，方向不明确");
+                if (bullReasons.size() > 0) reasons.add("多头信号: " + bullReasons.get(0));
+                if (bearReasons.size() > 0) reasons.add("空头信号: " + bearReasons.get(0));
+            } else if (netScore >= 3) {
+                // 强多头
+                trend = "BULLISH";
+                trendLabel = "多头趋势";
+                trendEmoji = "🔥📈";
+                trendStrength = Math.min(100, netScore * 15 + (adx != null ? adx.intValue() : 0));
+                trendColor = "#10b981"; // 绿色
+                reasons = bullReasons;
+            } else if (netScore >= 1) {
+                // 弱多头
+                trend = "BULLISH_WEAK";
+                trendLabel = "偏多震荡";
+                trendEmoji = "📈";
+                trendStrength = Math.min(70, netScore * 12 + (adx != null ? (int)(adx.doubleValue() * 0.5) : 0));
+                trendColor = "#6ee7b7"; // 浅绿
+                reasons = bullReasons;
+            } else if (netScore <= -3) {
+                // 强空头
+                trend = "BEARISH";
+                trendLabel = "空头趋势";
+                trendEmoji = "🔻📉";
+                trendStrength = Math.min(100, Math.abs(netScore) * 15 + (adx != null ? adx.intValue() : 0));
+                trendColor = "#ef4444"; // 红色
+                reasons = bearReasons;
+            } else if (netScore <= -1) {
+                // 弱空头
+                trend = "BEARISH_WEAK";
+                trendLabel = "偏空震荡";
+                trendEmoji = "📉";
+                trendStrength = Math.min(70, Math.abs(netScore) * 12 + (adx != null ? (int)(adx.doubleValue() * 0.5) : 0));
+                trendColor = "#fca5a5"; // 浅红
+                reasons = bearReasons;
+            } else {
+                // 完全中性
+                trend = "RANGING";
+                trendLabel = "震荡盘整";
+                trendEmoji = "↔️";
+                trendStrength = 20;
+                trendColor = "#f59e0b"; // 黄色
+                reasons = new ArrayList<>();
+                reasons.add("多空力量均衡，暂无明确方向");
+            }
+            
+            // 交易建议
+            String suggestion;
+            if ("BULLISH".equals(trend)) {
+                suggestion = "多头趋势明确，建议顺势做多，回调至EMA20附近可加仓";
+            } else if ("BULLISH_WEAK".equals(trend)) {
+                suggestion = "偏多但趋势不强，轻仓做多，严格止损";
+            } else if ("BEARISH".equals(trend)) {
+                suggestion = "空头趋势明确，建议观望或轻仓做空，反弹至EMA20可试空";
+            } else if ("BEARISH_WEAK".equals(trend)) {
+                suggestion = "偏空但趋势不强，建议观望为主";
+            } else {
+                suggestion = "震荡市场，建议等待方向明确后再入场，避免频繁交易";
+            }
+            
+            // 组装结果
+            result.put("success", true);
+            result.put("trend", trend);
+            result.put("trendLabel", trendLabel);
+            result.put("trendEmoji", trendEmoji);
+            result.put("trendStrength", Math.min(100, Math.max(0, trendStrength)));
+            result.put("trendColor", trendColor);
+            result.put("suggestion", suggestion);
+            result.put("reasons", reasons);
+            
+            // 详细指标
+            result.put("bullScore", bullScore);
+            result.put("bearScore", bearScore);
+            result.put("netScore", netScore);
+            
+            Map<String, Object> indicators = new LinkedHashMap<>();
+            indicators.put("EMA20", ema20 > 0 ? String.format("%.2f", ema20) : "--");
+            indicators.put("EMA50", ema50 > 0 ? String.format("%.2f", ema50) : "--");
+            indicators.put("EMA方向", emaDirection.equals("BULLISH") ? "金叉 📈" : emaDirection.equals("BEARISH") ? "死叉 📉" : "平行 ↔️");
+            indicators.put("EMA间距", String.format("%.3f%%", emaGapPercent));
+            indicators.put("ADX", adx != null ? String.format("%.2f", adx) : "--");
+            indicators.put("ADX级别", adxLevel.equals("STRONG") ? "强趋势 🔥" : adxLevel.equals("MODERATE") ? "中等 ⚡" : "弱/震荡 💤");
+            indicators.put("Williams%R", williamsR != null ? String.format("%.2f", williamsR) : "--");
+            indicators.put("WR区域", wrZone.equals("OVERSOLD") ? "超卖 🟢" : wrZone.equals("OVERBOUGHT") ? "超买 🔴" : "中性 ⚪");
+            indicators.put("布林带位置", String.format("%.0f%%", bbPosition));
+            indicators.put("布林带区域", bbZone);
+            if (bb != null) {
+                indicators.put("布林上轨", String.format("%.2f", bb.getUpper()));
+                indicators.put("布林中轨", String.format("%.2f", bb.getMiddle()));
+                indicators.put("布林下轨", String.format("%.2f", bb.getLower()));
+            }
+            indicators.put("当前价格", context.getCurrentPrice() != null ? context.getCurrentPrice().toPlainString() : "--");
+            result.put("indicators", indicators);
+            
+            result.put("timestamp", System.currentTimeMillis());
+            
+        } catch (Exception e) {
+            log.error("获取趋势分析失败", e);
+            result.put("success", false);
+            result.put("message", "获取趋势分析失败: " + e.getMessage());
+        }
+        
+        return result;
+    }
+    
     // ==================== 🔥 Dashboard增强方案 - P0核心API ====================
     
     /**
