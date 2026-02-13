@@ -1119,11 +1119,27 @@ public class TradingScheduler {
     }
     
     /**
-     * 🔥 新增：转换策略工厂Signal为TradingSignal
+     * 🔥 P3修复-20260213：转换策略工厂Signal为TradingSignal
+     * 问题：原来硬编码strength=70，丢失了CompositeStrategy的真实信号强度
+     * 修复：从StrategyOrchestrator获取真实信号（含强度、得分等完整信息）
      */
     private com.ltp.peter.augtrade.strategy.signal.TradingSignal convertFactorySignalToTradingSignal(
             TradingStrategyFactory.Signal signal, String symbol) {
         
+        // 🔥 优先从StrategyOrchestrator获取完整信号（含真实强度）
+        try {
+            com.ltp.peter.augtrade.strategy.signal.TradingSignal realSignal = 
+                    strategyOrchestrator.generateSignal(symbol);
+            if (realSignal != null) {
+                log.debug("📊 使用真实信号强度: {} (类型:{}, 得分:{})", 
+                        realSignal.getStrength(), realSignal.getType(), realSignal.getScore());
+                return realSignal;
+            }
+        } catch (Exception e) {
+            log.warn("⚠️ 获取真实信号失败，使用策略工厂信号", e);
+        }
+        
+        // Fallback: 使用策略工厂的简单信号
         com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType type;
         if (signal == TradingStrategyFactory.Signal.BUY) {
             type = com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY;
@@ -1133,10 +1149,9 @@ public class TradingScheduler {
             type = com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.HOLD;
         }
         
-        // 使用Builder模式创建TradingSignal
         return com.ltp.peter.augtrade.strategy.signal.TradingSignal.builder()
                 .type(type)
-                .strength(70) // 默认强度，策略工厂已做过滤
+                .strength(70)
                 .score(70)
                 .symbol(symbol)
                 .strategyName(strategyFactory.getActiveStrategyName())
@@ -1253,20 +1268,39 @@ public class TradingScheduler {
             
             // 检测死叉：EMA20 < EMA50（下降趋势）
             if (trend.isDownTrend()) {
-                log.warn("🚨 EMA死叉检测！EMA20={} < EMA50={}，趋势反转为下降", 
+                // 🔥 P3修复-20260213: 增加Supertrend交叉验证
+                // 问题：单独依赖EMA死叉导致错过39分超强信号
+                // 修复：如果Supertrend仍然看涨，说明短期下穿可能是假信号
+                try {
+                    com.ltp.peter.augtrade.strategy.core.MarketContext ctx = 
+                            strategyOrchestrator.getMarketContext(symbol, 100);
+                    if (ctx != null) {
+                        com.ltp.peter.augtrade.indicator.SupertrendCalculator.SupertrendResult st = 
+                                ctx.getIndicator("Supertrend");
+                        if (st != null && st.isUpTrend()) {
+                            log.warn("⚠️ EMA死叉但Supertrend仍看涨(ST={})，可能是假死叉，允许做多", 
+                                    String.format("%.2f", st.getSupertrendValue()));
+                            return false; // Supertrend否决EMA死叉
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Supertrend验证失败，使用EMA判断");
+                }
+                
+                log.warn("🚨 EMA死叉+Supertrend确认！EMA20={} < EMA50={}，趋势反转为下降", 
                         String.format("%.2f", trend.getEmaShort()), 
                         String.format("%.2f", trend.getEmaLong()));
                 return true;
             }
             
-            // 检测即将死叉：EMA20接近EMA50（差距<0.1%）
+            // 🔥 P3修复-20260213: 移除"即将死叉"阻止逻辑
+            // 原问题：EMA20=4954.12 > EMA50=4950.14（仍是金叉），仅因差距0.08%就禁止做多
+            //         导致6个策略一致同意的39分超强BUY信号被拦截
+            // 修复：EMA20>EMA50时不应阻止做多，只记录警告
             double emaGap = (trend.getEmaShort() - trend.getEmaLong()) / trend.getEmaLong() * 100;
             if (emaGap > 0 && emaGap < 0.1) {
-                log.warn("⚠️ EMA即将死叉！EMA20={}, EMA50={}, 差距仅{:.3f}%", 
-                        String.format("%.2f", trend.getEmaShort()), 
-                        String.format("%.2f", trend.getEmaLong()),
-                        emaGap);
-                return true;
+                log.warn("⚠️ EMA间距较窄（{:.4f}%），趋势可能减弱，但仍为金叉，不阻止做多", emaGap);
+                // 🔥 不再返回true！金叉状态下不应阻止做多
             }
             
             return false;

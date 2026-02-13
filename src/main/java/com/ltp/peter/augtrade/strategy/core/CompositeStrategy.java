@@ -261,12 +261,18 @@ public class CompositeStrategy implements Strategy {
                             STRATEGY_NAME, String.format("%.2f", williamsR));
                 }
                 
-                // 🔥 额外验证：做空需要超强信号（因为历史表现差）
-                int strengthThreshold = 80;
-                if (sellScore < strengthThreshold) {
-                    log.warn("[{}] 🚫 做空信号强度{}不足（需要≥{}），数据显示做空整体表现差", 
-                            STRATEGY_NAME, sellScore, strengthThreshold);
-                    return createHoldSignal(String.format("做空需要超强信号≥%d分", strengthThreshold), 
+                // 🔥 P2修复-20260213: 做空门槛从25降至12（需至少2个策略共识）
+                // 数据分析: ADX≥30+EMA死叉+SELL = 100%胜率, ADX≥40+SELL = 100%胜率
+                // 做空策略得分可能:
+                //   Supertrend(8) + VWAP(5) = 13 ✅
+                //   Supertrend(8) + TrendFilter(12) = 20 ✅
+                //   TrendFilter(12) + VWAP(5) = 17 ✅
+                // 单策略不能触发做空(Supertrend=8<12, VWAP=5<12)，保证安全
+                int shortStrengthThreshold = 12;
+                if (sellScore < shortStrengthThreshold) {
+                    log.warn("[{}] 🚫 做空信号强度{}不足（需要≥{}），做空需要多策略共识", 
+                            STRATEGY_NAME, sellScore, shortStrengthThreshold);
+                    return createHoldSignal(String.format("做空需要多策略共识≥%d分（当前%d分）", shortStrengthThreshold, sellScore), 
                             buyScore, sellScore);
                 }
                 
@@ -398,13 +404,19 @@ public class CompositeStrategy implements Strategy {
     }
     
     /**
-     * 🔥 P0修复-20260209: 验证价格位置是否合理（严格布林带过滤）
+     * 🔥 P1修复-20260213: 验证价格位置是否合理（动态布林带过滤）
      * 
-     * 核心改进:
-     * - 做多: 价格不能高于布林上轨（从5%溢价改为0%，数据显示13/16笔突破上轨追多大多亏损）
-     * - 做多: 理想入场区间在中轨附近（中轨±1σ范围内）
-     * - 做空: 价格不能低于布林下轨
-     * - 如果无布林带,使用EMA判断(价格偏离EMA20不超过0.3%)
+     * 问题回顾(20260209): 0%容忍度导致强趋势行情中全天无法开单
+     * - 2月13日黄金价格$4950~4963，布林上轨$4920~4954，价格全天高于上轨
+     * - 布林带基于20根K线(100分钟)计算，严重滞后于突破性上涨
+     * - 策略有做多评分12~19分（远超阈值6分），但全部被价格位置过滤拦截
+     * 
+     * 修复策略：根据ADX和EMA趋势动态调整布林带上轨容忍度
+     * - 强趋势(ADX≥30) + EMA金叉确认: 允许突破上轨1.0%（趋势延续概率高）
+     * - 中等趋势(ADX≥25) + EMA金叉确认: 允许突破上轨0.5%
+     * - 弱趋势/震荡: 保持0%容忍度（原逻辑，防止追高）
+     * 
+     * 核心原则：布林带滞后于趋势 → 用ADX+EMA判断趋势强度 → 动态放宽容忍度
      */
     private boolean validatePricePosition(MarketContext context, TradingSignal signal) {
         if (signal.getType() == TradingSignal.SignalType.HOLD) {
@@ -413,82 +425,199 @@ public class CompositeStrategy implements Strategy {
         
         BollingerBands bb = context.getIndicator("BollingerBands");
         BigDecimal price = context.getCurrentPrice();
+        Double adx = context.getIndicator("ADX");
+        EMACalculator.EMATrend emaTrend = context.getIndicator("EMATrend");
         
         // 如果没有布林带,使用EMA判断
         if (bb == null) {
-            EMACalculator.EMATrend trend = context.getIndicator("EMATrend");
-            if (trend == null) {
+            if (emaTrend == null) {
                 log.warn("[{}] 无布林带和EMA数据,跳过价格位置检查", STRATEGY_NAME);
                 return true;
             }
             
             double priceVal = price.doubleValue();
-            double emaShort = trend.getEmaShort();  // 使用emaShort (EMA20)
+            double emaShort = emaTrend.getEmaShort();  // 使用emaShort (EMA20)
+            
+            // 🔥 20260213: EMA容忍度也根据ADX动态调整
+            double emaTolerance = calculateEmaTolerance(adx, emaTrend);
             
             if (signal.getType() == TradingSignal.SignalType.BUY) {
-                // 🔥 20260209: 做多时价格不能高于EMA20超过0.3%（从0.5%收紧）
-                if (priceVal > emaShort * 1.003) {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过0.3%（追高保护）", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
+                if (priceVal > emaShort * (1 + emaTolerance)) {
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过{}%（追高保护）", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), 
+                            String.format("%.2f", emaShort),
+                            String.format("%.1f", emaTolerance * 100));
                     return false;
                 }
             } else if (signal.getType() == TradingSignal.SignalType.SELL) {
-                if (priceVal < emaShort * 0.997) {
-                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过0.3%", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.2f", emaShort));
+                if (priceVal < emaShort * (1 - emaTolerance)) {
+                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过{}%", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), 
+                            String.format("%.2f", emaShort),
+                            String.format("%.1f", emaTolerance * 100));
                     return false;
                 }
             }
             return true;
         }
         
-        // 有布林带,严格检查
+        // 有布林带,根据趋势强度动态检查
         Double upper = bb.getUpper();
         Double lower = bb.getLower();
         Double middle = bb.getMiddle();
         double priceVal = price.doubleValue();
         
         if (signal.getType() == TradingSignal.SignalType.BUY) {
-            // 🔥 P0修复-20260209：禁止在布林带上轨上方做多！
-            // 数据分析：今日13/16笔在突破上轨后做多，属于追高行为
-            // 仅3笔在中轨附近入场（#366中轨上方、#379/#380中轨下方）表现最好
-            // 修改：做多时价格必须低于布林带上轨（0%溢价，从5%改为0%）
-            if (priceVal > upper) {
+            // 🔥 P1修复-20260213：动态布林带上轨容忍度
+            double bbTolerance = calculateBBTolerance(adx, emaTrend, true);
+            double adjustedUpper = upper * (1 + bbTolerance);
+            
+            if (priceVal > adjustedUpper) {
                 double exceedsPercent = (priceVal - upper) / upper * 100;
-                log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{:.2f}%），禁止追高！", 
-                        STRATEGY_NAME, String.format("%.2f", priceVal), 
-                        String.format("%.2f", upper), exceedsPercent);
+                if (bbTolerance > 0) {
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 调整后上轨{}（原上轨{}, 容忍度{}%, 实际超出{:.2f}%）", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), 
+                            String.format("%.2f", adjustedUpper),
+                            String.format("%.2f", upper), 
+                            String.format("%.1f", bbTolerance * 100),
+                            exceedsPercent);
+                } else {
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{:.2f}%），禁止追高！", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), 
+                            String.format("%.2f", upper), exceedsPercent);
+                }
                 return false;
             }
             
-            // 🔥 P0修复-20260209：价格远离中轨时降低信号（理想入场在中轨附近）
-            double distFromMiddle = (priceVal - middle) / (upper - middle);
-            if (distFromMiddle > 0.8) {
-                // 价格在上轨80%以上区间，虽未突破但已偏高
-                log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{:.0f}%），信号质量降低", 
-                        STRATEGY_NAME, String.format("%.2f", priceVal), distFromMiddle * 100);
-                // 不阻止但记录警告，由信号强度调整处理
+            // 如果价格在原始上轨之上但在容忍范围内，记录趋势突破日志
+            if (priceVal > upper && priceVal <= adjustedUpper) {
+                double exceedsPercent = (priceVal - upper) / upper * 100;
+                log.info("[{}] 🔥 趋势突破放行: 价格{} > 原上轨{}（超出{:.2f}%），ADX={}, EMA趋势={}，容忍度{}%内放行", 
+                        STRATEGY_NAME, String.format("%.2f", priceVal), 
+                        String.format("%.2f", upper), exceedsPercent,
+                        adx != null ? String.format("%.1f", adx) : "N/A",
+                        emaTrend != null ? emaTrend.getTrendDescription() : "N/A",
+                        String.format("%.1f", bbTolerance * 100));
+            }
+            
+            // 价格远离中轨时记录警告（仅在布林带内时检查）
+            if (priceVal <= upper) {
+                double distFromMiddle = (priceVal - middle) / (upper - middle);
+                if (distFromMiddle > 0.8) {
+                    log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{:.0f}%），信号质量降低", 
+                            STRATEGY_NAME, String.format("%.2f", priceVal), distFromMiddle * 100);
+                }
             }
             
         } else if (signal.getType() == TradingSignal.SignalType.SELL) {
-            // 做空: 价格不能低于布林下轨
-            if (priceVal < lower) {
+            // 做空: 动态布林带下轨容忍度（对称逻辑）
+            double bbTolerance = calculateBBTolerance(adx, emaTrend, false);
+            double adjustedLower = lower * (1 - bbTolerance);
+            
+            if (priceVal < adjustedLower) {
                 double below = lower - priceVal;
-                log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于布林下轨{} (-{} USD)", 
+                log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于调整后下轨{} (-{} USD)", 
                         STRATEGY_NAME, 
                         String.format("%.2f", priceVal), 
-                        String.format("%.2f", lower), 
+                        String.format("%.2f", adjustedLower), 
                         String.format("%.2f", below));
                 return false;
             }
+            
+            if (priceVal < lower && priceVal >= adjustedLower) {
+                log.info("[{}] 🔥 趋势突破放行(空): 价格{} < 原下轨{}，ADX={}, 容忍度{}%内放行", 
+                        STRATEGY_NAME, String.format("%.2f", priceVal), 
+                        String.format("%.2f", lower),
+                        adx != null ? String.format("%.1f", adx) : "N/A",
+                        String.format("%.1f", bbTolerance * 100));
+            }
         }
         
-        log.debug("[{}] ✅ 价格位置检查通过: 价格{} 在布林带[{}, {}]内", 
+        log.debug("[{}] ✅ 价格位置检查通过: 价格{} 在布林带[{}, {}]内（ADX={}, 趋势={}）", 
                 STRATEGY_NAME, 
                 String.format("%.2f", priceVal), 
                 String.format("%.2f", lower), 
-                String.format("%.2f", upper));
+                String.format("%.2f", upper),
+                adx != null ? String.format("%.1f", adx) : "N/A",
+                emaTrend != null ? emaTrend.getTrendDescription() : "N/A");
         return true;
+    }
+    
+    /**
+     * 🔥 新增-20260213: 计算布林带容忍度
+     * 
+     * 根据ADX强度和EMA趋势方向，动态计算允许突破布林带的百分比
+     * 核心思想：强趋势行情中布林带会滞后，需要给予更多空间
+     * 
+     * @param adx ADX值
+     * @param emaTrend EMA趋势
+     * @param isBuy 是否做多（做多检查上轨，做空检查下轨）
+     * @return 容忍百分比（0.0 = 0%, 0.01 = 1%）
+     */
+    private double calculateBBTolerance(Double adx, EMACalculator.EMATrend emaTrend, boolean isBuy) {
+        if (adx == null) {
+            return 0.0; // 无ADX数据，不放宽
+        }
+        
+        // 检查EMA趋势是否与交易方向一致
+        boolean emaConfirmed = false;
+        if (emaTrend != null) {
+            if (isBuy && emaTrend.isUpTrend()) {
+                emaConfirmed = true; // 做多 + EMA金叉 = 趋势确认
+            } else if (!isBuy && emaTrend.isDownTrend()) {
+                emaConfirmed = true; // 做空 + EMA死叉 = 趋势确认
+            }
+        }
+        
+        if (!emaConfirmed) {
+            // EMA不确认趋势方向，不放宽（保持原始0%容忍度）
+            log.debug("[{}] BB容忍度: 0%（EMA趋势未确认{}方向）", 
+                    STRATEGY_NAME, isBuy ? "做多" : "做空");
+            return 0.0;
+        }
+        
+        // ADX >= 30: 强趋势，布林带滞后严重，容忍1.0%
+        if (adx >= 30) {
+            log.info("[{}] 📈 BB容忍度: 1.0%（强趋势ADX={}, EMA确认{}）", 
+                    STRATEGY_NAME, String.format("%.1f", adx), isBuy ? "上涨" : "下跌");
+            return 0.010;
+        }
+        
+        // ADX >= 25: 中等趋势，容忍0.5%
+        if (adx >= 25) {
+            log.info("[{}] 📊 BB容忍度: 0.5%（中等趋势ADX={}, EMA确认{}）", 
+                    STRATEGY_NAME, String.format("%.1f", adx), isBuy ? "上涨" : "下跌");
+            return 0.005;
+        }
+        
+        // ADX < 25: 弱趋势/震荡，保持严格（0%容忍度）
+        log.debug("[{}] BB容忍度: 0%（弱趋势ADX={}）", STRATEGY_NAME, String.format("%.1f", adx));
+        return 0.0;
+    }
+    
+    /**
+     * 🔥 新增-20260213: 计算EMA容忍度
+     * 当无布林带时使用，逻辑与BB容忍度类似
+     */
+    private double calculateEmaTolerance(Double adx, EMACalculator.EMATrend emaTrend) {
+        // 基础容忍度0.3%
+        double baseTolerance = 0.003;
+        
+        if (adx == null || emaTrend == null) {
+            return baseTolerance;
+        }
+        
+        // 强趋势 + EMA确认: 放宽到0.8%
+        if (adx >= 30 && (emaTrend.isUpTrend() || emaTrend.isDownTrend())) {
+            return 0.008;
+        }
+        
+        // 中等趋势 + EMA确认: 放宽到0.5%
+        if (adx >= 25 && (emaTrend.isUpTrend() || emaTrend.isDownTrend())) {
+            return 0.005;
+        }
+        
+        return baseTolerance;
     }
     
     /**

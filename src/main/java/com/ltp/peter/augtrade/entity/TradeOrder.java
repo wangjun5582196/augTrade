@@ -172,6 +172,38 @@ public class TradeOrder {
      */
     private BigDecimal mlConfidence;
     
+    // ==================== 🔥 新增-20260213：VWAP/Supertrend/OBV指标字段 ====================
+    
+    /**
+     * VWAP值
+     */
+    private BigDecimal vwap;
+    
+    /**
+     * 价格偏离VWAP百分比
+     */
+    private BigDecimal vwapDeviation;
+    
+    /**
+     * Supertrend线的值
+     */
+    private BigDecimal supertrendValue;
+    
+    /**
+     * Supertrend趋势方向：UP/DOWN
+     */
+    private String supertrendDirection;
+    
+    /**
+     * OBV趋势方向（正=看涨，负=看跌）
+     */
+    private BigDecimal obvTrend;
+    
+    /**
+     * OBV是否量价确认：1=确认，0=未确认
+     */
+    private Integer obvVolumeConfirmed;
+    
     // ==================== 原有字段 ====================
     
     /**

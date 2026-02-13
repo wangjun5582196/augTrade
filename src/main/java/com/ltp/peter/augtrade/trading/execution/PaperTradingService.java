@@ -836,6 +836,30 @@ public class PaperTradingService {
                 order.setSignalScore(signal.getScore());
             }
             
+            // 🔥 新增-20260213: VWAP指标
+            com.ltp.peter.augtrade.indicator.VWAPCalculator.VWAPResult vwap = 
+                    context.getIndicator("VWAP");
+            if (vwap != null) {
+                order.setVwap(BigDecimal.valueOf(vwap.getVwap()));
+                order.setVwapDeviation(BigDecimal.valueOf(vwap.getDeviationPercent()));
+            }
+            
+            // 🔥 新增-20260213: Supertrend指标
+            com.ltp.peter.augtrade.indicator.SupertrendCalculator.SupertrendResult supertrend = 
+                    context.getIndicator("Supertrend");
+            if (supertrend != null) {
+                order.setSupertrendValue(BigDecimal.valueOf(supertrend.getSupertrendValue()));
+                order.setSupertrendDirection(supertrend.isUpTrend() ? "UP" : "DOWN");
+            }
+            
+            // 🔥 新增-20260213: OBV指标
+            com.ltp.peter.augtrade.indicator.OBVCalculator.OBVResult obv = 
+                    context.getIndicator("OBV");
+            if (obv != null) {
+                order.setObvTrend(BigDecimal.valueOf(obv.getObvTrend()));
+                order.setObvVolumeConfirmed(obv.isVolumeConfirmed() ? 1 : 0);
+            }
+            
             // 7. ATR和市场状态
             if (!context.getKlines().isEmpty()) {
                 // 计算ATR (Double → BigDecimal)

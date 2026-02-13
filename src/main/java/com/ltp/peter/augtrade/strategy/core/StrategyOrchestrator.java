@@ -2,6 +2,9 @@ package com.ltp.peter.augtrade.strategy.core;
 
 import com.ltp.peter.augtrade.entity.Kline;
 import com.ltp.peter.augtrade.indicator.*;
+import com.ltp.peter.augtrade.indicator.VWAPCalculator;
+import com.ltp.peter.augtrade.indicator.SupertrendCalculator;
+import com.ltp.peter.augtrade.indicator.OBVCalculator;
 import com.ltp.peter.augtrade.market.MarketDataService;
 import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
@@ -58,6 +61,15 @@ public class StrategyOrchestrator {
     
     @Autowired
     private EMACalculator emaCalculator;
+    
+    @Autowired
+    private VWAPCalculator vwapCalculator;
+    
+    @Autowired
+    private SupertrendCalculator supertrendCalculator;
+    
+    @Autowired
+    private OBVCalculator obvCalculator;
     
     /**
      * 生成交易信号（主入口）
@@ -235,7 +247,34 @@ public class StrategyOrchestrator {
                 log.info("[StrategyOrchestrator] EMA趋势: {}", emaTrend.getTrendDescription());
             }
             
-            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标", context.getIndicators().size());
+            // 🔥 新增-20260213: VWAP（日内短线核心基准价格）
+            VWAPCalculator.VWAPResult vwap = vwapCalculator.calculate(klines);
+            if (vwap != null) {
+                context.addIndicator("VWAP", vwap);
+                log.info("[StrategyOrchestrator] VWAP={}, 偏离={:.3f}%, 位置={}", 
+                        String.format("%.2f", vwap.getVwap()),
+                        vwap.getDeviationPercent(),
+                        vwap.getPositionDescription());
+            }
+            
+            // 🔥 新增-20260213: Supertrend（ATR趋势跟踪+动态止损）
+            SupertrendCalculator.SupertrendResult supertrend = supertrendCalculator.calculate(klines);
+            if (supertrend != null) {
+                context.addIndicator("Supertrend", supertrend);
+                log.info("[StrategyOrchestrator] Supertrend={}, {}{}", 
+                        String.format("%.2f", supertrend.getSupertrendValue()),
+                        supertrend.getTrendDescription(),
+                        supertrend.isTrendChanged() ? " ⚡翻转!" : "");
+            }
+            
+            // 🔥 新增-20260213: OBV（成交量确认/背离检测）
+            OBVCalculator.OBVResult obv = obvCalculator.calculate(klines);
+            if (obv != null) {
+                context.addIndicator("OBV", obv);
+                log.info("[StrategyOrchestrator] OBV: {}", obv.getVolumeDescription());
+            }
+            
+            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标（含VWAP/Supertrend/OBV）", context.getIndicators().size());
             
         } catch (Exception e) {
             log.error("[StrategyOrchestrator] 计算技术指标时发生错误", e);
