@@ -97,10 +97,11 @@ public class VWAPCalculator implements TechnicalIndicator<VWAPCalculator.VWAPRes
         result.setDeviationPercent(deviation);
         result.setCurrentPrice(currentPrice);
 
-        log.debug("[VWAP] VWAP={}, 价格={}, 偏离={:.3f}%, σ={:.2f}", 
+        log.debug("[VWAP] VWAP={}, 价格={}, 偏离={}%, σ={}", 
                 String.format("%.2f", vwap), 
                 String.format("%.2f", currentPrice),
-                deviation, stdDev);
+                String.format("%.3f", deviation), 
+                String.format("%.2f", stdDev));
 
         return result;
     }

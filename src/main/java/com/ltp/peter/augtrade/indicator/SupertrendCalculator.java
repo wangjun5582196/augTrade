@@ -153,12 +153,12 @@ public class SupertrendCalculator implements TechnicalIndicator<SupertrendCalcul
         double distance = Math.abs(closes[latest] - supertrend[latest]);
         result.setDistancePercent(supertrend[latest] > 0 ? distance / supertrend[latest] * 100 : 0);
 
-        log.debug("[Supertrend] 值={}, 趋势={}, 翻转={}, 价格={}, 距离={:.3f}%",
+        log.debug("[Supertrend] 值={}, 趋势={}, 翻转={}, 价格={}, 距离={}%",
                 String.format("%.2f", supertrend[latest]),
                 isUpTrend[latest] ? "上升" : "下降",
                 result.isTrendChanged() ? "是" : "否",
                 String.format("%.2f", closes[latest]),
-                result.getDistancePercent());
+                String.format("%.3f", result.getDistancePercent()));
 
         return result;
     }

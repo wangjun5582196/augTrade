@@ -46,11 +46,11 @@ public class VWAPStrategy implements Strategy {
             OBVCalculator.OBVResult obv = context.getIndicator("OBV");
             double deviation = vwap.getDeviationPercent();
             
-            log.debug("[{}] VWAP={}, 价格={}, 偏离={:.3f}%, 位置={}", 
+            log.debug("[{}] VWAP={}, 价格={}, 偏离={}%, 位置={}", 
                     STRATEGY_NAME,
                     String.format("%.2f", vwap.getVwap()),
                     String.format("%.2f", vwap.getCurrentPrice()),
-                    deviation,
+                    String.format("%.3f", deviation),
                     vwap.getPositionDescription());
 
             // ========== 做多信号 ==========
@@ -61,8 +61,8 @@ public class VWAPStrategy implements Strategy {
                 // 价格刚刚从下方穿越VWAP
                 boolean volumeConfirm = obv != null && (obv.isVolumeConfirmed() || obv.isObvAboveEma());
                 if (volumeConfirm) {
-                    log.info("[{}] 🎯 VWAP突破做多：价格刚穿越VWAP上方(偏离{:.3f}%), 量能确认",
-                            STRATEGY_NAME, deviation);
+                    log.info("[{}] 🎯 VWAP突破做多：价格刚穿越VWAP上方(偏离{}%), 量能确认",
+                            STRATEGY_NAME, String.format("%.3f", deviation));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.BUY)
                             .strength(75)
@@ -80,8 +80,8 @@ public class VWAPStrategy implements Strategy {
             if (vwap.isPriceAboveVWAP() && deviation >= 0.05 && deviation <= 0.3) {
                 boolean volumeOK = obv == null || !obv.isBearishDivergence(); // 无看跌背离即可
                 if (volumeOK) {
-                    log.info("[{}] 📈 VWAP上方顺势做多：偏离{:.3f}%在理想区间",
-                            STRATEGY_NAME, deviation);
+                    log.info("[{}] 📈 VWAP上方顺势做多：偏离{}%在理想区间",
+                            STRATEGY_NAME, String.format("%.3f", deviation));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.BUY)
                             .strength(65)
@@ -99,8 +99,8 @@ public class VWAPStrategy implements Strategy {
 
             // 信号3：价格极度偏离VWAP+2σ上方 = 超买，不追多
             if (vwap.isAboveUpperBand2()) {
-                log.warn("[{}] ⚠️ 价格超买(偏离VWAP+2σ: {:.3f}%)，不追多",
-                        STRATEGY_NAME, deviation);
+                log.warn("[{}] ⚠️ 价格超买(偏离VWAP+2σ: {}%)，不追多",
+                        STRATEGY_NAME, String.format("%.3f", deviation));
                 return createHoldSignal(String.format("超买区(偏离%.3f%%>+2σ)", deviation));
             }
 
@@ -115,8 +115,8 @@ public class VWAPStrategy implements Strategy {
                 boolean strongTrend = adx != null && adx >= 30;
                 
                 if (volumeConfirm && strongTrend) {
-                    log.info("[{}] 🔴 VWAP跌破做空：价格刚穿越VWAP下方(偏离{:.3f}%), ADX={}, 量能确认",
-                            STRATEGY_NAME, deviation, String.format("%.1f", adx));
+                    log.info("[{}] 🔴 VWAP跌破做空：价格刚穿越VWAP下方(偏离{}%), ADX={}, 量能确认",
+                            STRATEGY_NAME, String.format("%.3f", deviation), String.format("%.1f", adx));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.SELL)
                             .strength(70)
@@ -136,8 +136,8 @@ public class VWAPStrategy implements Strategy {
                 boolean noBullishDivergence = obv == null || !obv.isBullishDivergence();
                 
                 if (strongTrend && noBullishDivergence) {
-                    log.info("[{}] 📉 VWAP下方顺势做空：偏离{:.3f}%, ADX={}",
-                            STRATEGY_NAME, deviation, String.format("%.1f", adx));
+                    log.info("[{}] 📉 VWAP下方顺势做空：偏离{}%, ADX={}",
+                            STRATEGY_NAME, String.format("%.3f", deviation), String.format("%.1f", adx));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.SELL)
                             .strength(60)

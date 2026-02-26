@@ -251,9 +251,9 @@ public class StrategyOrchestrator {
             VWAPCalculator.VWAPResult vwap = vwapCalculator.calculate(klines);
             if (vwap != null) {
                 context.addIndicator("VWAP", vwap);
-                log.info("[StrategyOrchestrator] VWAP={}, 偏离={:.3f}%, 位置={}", 
+                log.info("[StrategyOrchestrator] VWAP={}, 偏离={}%, 位置={}", 
                         String.format("%.2f", vwap.getVwap()),
-                        vwap.getDeviationPercent(),
+                        String.format("%.3f", vwap.getDeviationPercent()),
                         vwap.getPositionDescription());
             }
             
