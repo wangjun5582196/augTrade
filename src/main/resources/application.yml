@@ -78,6 +78,19 @@ bybit:
     min-qty: 10
     max-qty: 100
     leverage: 2                             # ⭐ 2倍杠杆（正式网建议保守）
+
+# 币安 API配置（获取黄金报价）🌟🌟🌟🌟🌟
+binance:
+  api:
+    enabled: true                           # ✅ 已启用币安
+    key: ""                                 # 可选：获取价格无需API Key
+    secret: ""                              # 可选：获取价格无需API Secret
+    testnet: false                          # ✅ 正式网（获取真实价格）
+  gold:
+    # 币安支持的黄金代币交易对：
+    # PAXGUSDT - Paxos Gold (PAX Gold) - 推荐
+    # XAUUSDT - Tether Gold (但币安可能不支持，需要验证)
+    symbol: PAXGUSDT                        # ✅ Paxos黄金代币（1 PAXG = 1盎司黄金）
   risk:
     # 止损止盈模式：fixed（固定）/ atr（动态ATR）
     mode: atr                               # 🔥 P0修复：改为ATR动态模式，根据市场波动自动调整
