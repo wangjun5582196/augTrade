@@ -881,6 +881,67 @@
                     }
                     
                     html += '</div>';
+                    
+                    // 🔥 新增-20260309: 显示新指标数据
+                    if (data.newIndicators && Object.keys(data.newIndicators).length > 0) {
+                        html += `
+                            <div style="background: #e0f2fe; border-radius: 10px; padding: 12px; margin-top: 15px;">
+                                <div style="font-size: 13px; font-weight: bold; color: #0c4a6e; margin-bottom: 10px;">
+                                    🎯 新指标数据 (优化版方案C)
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        `;
+                        
+                        for (const [key, value] of Object.entries(data.newIndicators)) {
+                            html += `
+                                <div style="background: white; padding: 8px; border-radius: 6px;">
+                                    <div style="font-size: 11px; color: #666;">${key}</div>
+                                    <div style="font-size: 13px; font-weight: bold; color: #0c4a6e;">${value}</div>
+                                </div>
+                            `;
+                        }
+                        
+                        html += `
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    // 显示买入和卖出理由
+                    if (data.buyReasons && data.buyReasons.length > 0) {
+                        html += `
+                            <div style="margin-top: 10px; padding: 10px; background: #dcfce7; border-radius: 8px;">
+                                <div style="font-size: 12px; font-weight: bold; color: #166534; margin-bottom: 5px;">
+                                    🐂 做多理由:
+                                </div>
+                                <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                        `;
+                        data.buyReasons.forEach(reason => {
+                            html += `<span style="background: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #166534;">${reason}</span>`;
+                        });
+                        html += `
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    if (data.sellReasons && data.sellReasons.length > 0) {
+                        html += `
+                            <div style="margin-top: 10px; padding: 10px; background: #fee2e2; border-radius: 8px;">
+                                <div style="font-size: 12px; font-weight: bold; color: #991b1b; margin-bottom: 5px;">
+                                    🐻 做空理由:
+                                </div>
+                                <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                        `;
+                        data.sellReasons.forEach(reason => {
+                            html += `<span style="background: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; color: #991b1b;">${reason}</span>`;
+                        });
+                        html += `
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
                     container.innerHTML = html;
                 } else {
                     container.innerHTML = '<div class="empty-state">获取信号失败</div>';

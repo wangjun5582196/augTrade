@@ -139,6 +139,15 @@ trading:
     enabled: true
     interval: 60000  # 🔥 P0修复：从10秒延长到60秒，减少噪音交易
     
+    # 🔥 优化版方案C - 禁用滞后策略（2026-03-09）
+    # 移除3个滞后指标策略，保留高实时性策略
+    rsi:
+      enabled: false  # ❌ 禁用RSI策略（与Williams %R重复，滞后）
+    bollinger-breakout:
+      enabled: false  # ❌ 禁用布林带突破策略（20根K线滞后严重）
+    balanced-aggressive:
+      enabled: false  # ❌ 禁用均衡激进策略（包含MACD等滞后指标）
+    
   # 数据采集配置
   data-collector:
     enabled: true

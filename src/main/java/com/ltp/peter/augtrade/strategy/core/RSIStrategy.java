@@ -25,6 +25,11 @@ import org.springframework.stereotype.Service;
  */
 @Slf4j
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+    name = "trading.strategy.rsi.enabled",
+    havingValue = "true",
+    matchIfMissing = false
+)
 public class RSIStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "RSI";

@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 交易信号模型
@@ -29,6 +30,80 @@ public class TradingSignal {
      * 信号评分
      */
     private int score;
+    
+    // ==================== 🔥 新增-20260309：评分和指标字段 ====================
+    
+    /**
+     * 做多总分
+     */
+    private int buyScore;
+    
+    /**
+     * 做空总分
+     */
+    private int sellScore;
+    
+    /**
+     * 做多理由列表
+     */
+    private List<String> buyReasons;
+    
+    /**
+     * 做空理由列表
+     */
+    private List<String> sellReasons;
+    
+    /**
+     * 2根K线动量
+     */
+    private BigDecimal momentum2;
+    
+    /**
+     * 5根K线动量
+     */
+    private BigDecimal momentum5;
+    
+    /**
+     * 成交量比率
+     */
+    private Double volumeRatio;
+    
+    /**
+     * 最近摆动高点
+     */
+    private BigDecimal lastSwingHigh;
+    
+    /**
+     * 最近摆动低点
+     */
+    private BigDecimal lastSwingLow;
+    
+    /**
+     * HMA20值
+     */
+    private BigDecimal hma20;
+    
+    /**
+     * HMA斜率
+     */
+    private Double hma20Slope;
+    
+    /**
+     * 价格位置
+     */
+    private String pricePosition;
+    
+    /**
+     * 趋势确认
+     */
+    private Boolean trendConfirmed;
+    
+    /**
+     * 信号生成时间
+     */
+    private LocalDateTime signalGenerateTime;
+    
+    // ==================== 原有字段 ====================
     
     /**
      * 交易品种

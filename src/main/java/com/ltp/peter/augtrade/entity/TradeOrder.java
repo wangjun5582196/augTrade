@@ -204,6 +204,93 @@ public class TradeOrder {
      */
     private Integer obvVolumeConfirmed;
     
+    // ==================== 🔥 新增-20260309：信号追踪字段(方案C优化版) ====================
+    
+    /**
+     * 做多信号总分
+     */
+    private Integer buyScore;
+    
+    /**
+     * 做空信号总分
+     */
+    private Integer sellScore;
+    
+    /**
+     * 信号理由列表(JSON格式)
+     */
+    private String signalReasons;
+    
+    /**
+     * 2根K线动量
+     */
+    private BigDecimal momentum2;
+    
+    /**
+     * 5根K线动量
+     */
+    private BigDecimal momentum5;
+    
+    /**
+     * 成交量比率(当前/20周期平均)
+     */
+    private Double volumeRatio;
+    
+    /**
+     * 当前成交量
+     */
+    private BigDecimal currentVolume;
+    
+    /**
+     * 20周期平均成交量
+     */
+    private BigDecimal avgVolume;
+    
+    /**
+     * 最近摆动高点
+     */
+    private BigDecimal swingHigh;
+    
+    /**
+     * 最近摆动低点
+     */
+    private BigDecimal swingLow;
+    
+    /**
+     * 价格距离摆动高点
+     */
+    private BigDecimal swingHighDistance;
+    
+    /**
+     * 价格距离摆动低点
+     */
+    private BigDecimal swingLowDistance;
+    
+    /**
+     * Hull Moving Average 20
+     */
+    private BigDecimal hma20;
+    
+    /**
+     * HMA斜率(判断趋势强度)
+     */
+    private BigDecimal hmaSlope;
+    
+    /**
+     * HMA趋势方向(UP/DOWN/SIDEWAYS)
+     */
+    private String hmaTrend;
+    
+    /**
+     * 价格位置(ABOVE_SWING_HIGH/BELOW_SWING_LOW/BETWEEN)
+     */
+    private String pricePosition;
+    
+    /**
+     * 趋势是否确认(1=是,0=否)
+     */
+    private Boolean trendConfirmed;
+    
     // ==================== 原有字段 ====================
     
     /**

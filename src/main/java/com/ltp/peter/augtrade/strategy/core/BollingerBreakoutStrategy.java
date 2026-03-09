@@ -30,6 +30,11 @@ import java.util.List;
  */
 @Slf4j
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+    name = "trading.strategy.bollinger-breakout.enabled",
+    havingValue = "true",
+    matchIfMissing = false
+)
 public class BollingerBreakoutStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "BollingerBreakout";

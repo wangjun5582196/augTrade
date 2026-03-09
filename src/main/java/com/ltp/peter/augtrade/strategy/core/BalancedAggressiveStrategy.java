@@ -32,6 +32,11 @@ import java.math.BigDecimal;
  */
 @Slf4j
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+    name = "trading.strategy.balanced-aggressive.enabled",
+    havingValue = "true",
+    matchIfMissing = false
+)
 public class BalancedAggressiveStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "BalancedAggressive";

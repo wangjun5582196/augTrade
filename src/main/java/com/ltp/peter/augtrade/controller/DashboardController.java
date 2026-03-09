@@ -977,6 +977,57 @@ public class DashboardController {
             result.put("rejectReason", rejectReason);
             result.put("reason", signal.getReason());
             result.put("currentPrice", context.getCurrentPrice());
+            
+            // 🔥 新增-20260309: 添加新指标数据
+            Map<String, Object> newIndicators = new LinkedHashMap<>();
+            
+            // 1. 动量指标
+            if (signal.getMomentum2() != null) {
+                newIndicators.put("动量2", signal.getMomentum2().toPlainString());
+            }
+            if (signal.getMomentum5() != null) {
+                newIndicators.put("动量5", signal.getMomentum5().toPlainString());
+            }
+            
+            // 2. 成交量指标
+            if (signal.getVolumeRatio() != null) {
+                newIndicators.put("成交量比率", String.format("%.2f", signal.getVolumeRatio()));
+            }
+            
+            // 3. 摆动点指标
+            if (signal.getLastSwingHigh() != null) {
+                newIndicators.put("摆动高点", signal.getLastSwingHigh().toPlainString());
+            }
+            if (signal.getLastSwingLow() != null) {
+                newIndicators.put("摆动低点", signal.getLastSwingLow().toPlainString());
+            }
+            if (signal.getPricePosition() != null) {
+                String posLabel = "ABOVE_SWING_HIGH".equals(signal.getPricePosition()) ? "突破高点 🚀" :
+                                 "BELOW_SWING_LOW".equals(signal.getPricePosition()) ? "跌破低点 📉" : "区间内";
+                newIndicators.put("价格位置", posLabel);
+            }
+            
+            // 4. HMA指标
+            if (signal.getHma20() != null) {
+                newIndicators.put("HMA20", signal.getHma20().toPlainString());
+            }
+            if (signal.getHma20Slope() != null) {
+                newIndicators.put("HMA斜率", String.format("%.4f%%", signal.getHma20Slope()));
+            }
+            
+            // 5. 趋势确认
+            if (signal.getTrendConfirmed() != null) {
+                newIndicators.put("趋势确认", signal.getTrendConfirmed() ? "✅ 已确认" : "❌ 未确认");
+            }
+            
+            // 6. 评分数据
+            newIndicators.put("做多评分", String.valueOf(signal.getBuyScore()));
+            newIndicators.put("做空评分", String.valueOf(signal.getSellScore()));
+            
+            result.put("newIndicators", newIndicators);
+            result.put("buyReasons", signal.getBuyReasons());
+            result.put("sellReasons", signal.getSellReasons());
+            
             result.put("timestamp", System.currentTimeMillis());
             
         } catch (Exception e) {
