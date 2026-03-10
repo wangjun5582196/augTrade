@@ -7,11 +7,16 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 /**
  * 摆动高低点计算器
  * 识别价格的摆动高点和低点，用于判断支撑阻力位
+ * 
+ * 🔥 优化-20260310: 
+ * - P0: 增加时效性检查，避免使用过时的摆动点
+ * - P1: 增加跌破摆动低点的做空信号
  * 
  * @author Peter Wang
  * @since 2026-03-09
@@ -21,6 +26,12 @@ import java.util.List;
 public class SwingPointCalculator {
     
     private static final int DEFAULT_LOOKBACK = 5;
+    
+    // 🔥 P0修复-20260310: 摆动点时效性阈值（分钟）
+    private static final long SWING_POINT_VALIDITY_MINUTES = 15;
+    
+    // 🔥 P0修复-20260310: 突破幅度阈值（避免微小突破）
+    private static final double BREAKOUT_THRESHOLD_PERCENT = 0.003; // 0.3%
     
     /**
      * 计算摆动点
@@ -50,10 +61,53 @@ public class SwingPointCalculator {
             SwingPoint lastSwingLow = findLastSwingLow(klines, lookback);
             
             BigDecimal currentPrice = klines.get(0).getClosePrice();
+            LocalDateTime currentTime = klines.get(0).getTimestamp();
             
-            // 判断价格是否突破摆动高点
-            boolean isBreakingHigh = lastSwingHigh != null && 
-                                    currentPrice.compareTo(lastSwingHigh.getPrice()) > 0;
+            // 🔥 P0修复-20260310: 判断价格是否突破摆动高点（增加时效性和幅度检查）
+            boolean isBreakingHigh = false;
+            if (lastSwingHigh != null) {
+                // 检查摆动点的时效性
+                long minutesSinceSwingHigh = ChronoUnit.MINUTES.between(
+                        lastSwingHigh.getTime(), currentTime);
+                
+                // 计算突破幅度
+                BigDecimal breakoutAmount = currentPrice.subtract(lastSwingHigh.getPrice());
+                double breakoutPercent = breakoutAmount.divide(lastSwingHigh.getPrice(), 
+                        4, java.math.RoundingMode.HALF_UP).doubleValue();
+                
+                // 只有在时效性内且突破幅度足够才算有效突破
+                if (minutesSinceSwingHigh <= SWING_POINT_VALIDITY_MINUTES && 
+                    breakoutPercent > BREAKOUT_THRESHOLD_PERCENT) {
+                    isBreakingHigh = true;
+                    log.info("[SwingPointCalculator] ✅ 有效突破摆动高点: 价格{} > 高点{} (+{:.2f}%), 时效{}分钟", 
+                            currentPrice, lastSwingHigh.getPrice(), 
+                            breakoutPercent * 100, minutesSinceSwingHigh);
+                } else if (currentPrice.compareTo(lastSwingHigh.getPrice()) > 0) {
+                    log.warn("[SwingPointCalculator] ⚠️ 突破摆动高点但被过滤: 价格{} > 高点{} (+{:.2f}%), 时效{}分钟 (阈值:{}分钟, 幅度阈值:{:.2f}%)", 
+                            currentPrice, lastSwingHigh.getPrice(), 
+                            breakoutPercent * 100, minutesSinceSwingHigh,
+                            SWING_POINT_VALIDITY_MINUTES, BREAKOUT_THRESHOLD_PERCENT * 100);
+                }
+            }
+            
+            // 🔥 P1优化-20260310: 判断价格是否跌破摆动低点（做空信号）
+            boolean isBreakingLow = false;
+            if (lastSwingLow != null) {
+                long minutesSinceSwingLow = ChronoUnit.MINUTES.between(
+                        lastSwingLow.getTime(), currentTime);
+                
+                BigDecimal breakdownAmount = lastSwingLow.getPrice().subtract(currentPrice);
+                double breakdownPercent = breakdownAmount.divide(lastSwingLow.getPrice(), 
+                        4, java.math.RoundingMode.HALF_UP).doubleValue();
+                
+                if (minutesSinceSwingLow <= SWING_POINT_VALIDITY_MINUTES && 
+                    breakdownPercent > BREAKOUT_THRESHOLD_PERCENT) {
+                    isBreakingLow = true;
+                    log.info("[SwingPointCalculator] ✅ 有效跌破摆动低点: 价格{} < 低点{} (-{:.2f}%), 时效{}分钟", 
+                            currentPrice, lastSwingLow.getPrice(), 
+                            breakdownPercent * 100, minutesSinceSwingLow);
+                }
+            }
             
             // 判断价格是否在摆动低点附近（支撑有效）
             boolean isNearSupport = false;
@@ -64,16 +118,17 @@ public class SwingPointCalculator {
                                distance.doubleValue() < lastSwingLow.getPrice().doubleValue() * 0.005;
             }
             
-            log.debug("[SwingPointCalculator] 当前价:{}, 摆动高点:{}, 摆动低点:{}, 突破高点:{}, 接近支撑:{}", 
+            log.debug("[SwingPointCalculator] 当前价:{}, 摆动高点:{}, 摆动低点:{}, 突破高点:{}, 跌破低点:{}, 接近支撑:{}", 
                     currentPrice, 
                     lastSwingHigh != null ? lastSwingHigh.getPrice() : "null",
                     lastSwingLow != null ? lastSwingLow.getPrice() : "null",
-                    isBreakingHigh, isNearSupport);
+                    isBreakingHigh, isBreakingLow, isNearSupport);
             
             return SwingPointResult.builder()
                     .lastSwingHigh(lastSwingHigh)
                     .lastSwingLow(lastSwingLow)
                     .isBreakingHigh(isBreakingHigh)
+                    .isBreakingLow(isBreakingLow)  // 🔥 P1新增
                     .isNearSupport(isNearSupport)
                     .build();
             
@@ -155,7 +210,8 @@ public class SwingPointCalculator {
     public static class SwingPointResult {
         private SwingPoint lastSwingHigh;    // 最近摆动高点
         private SwingPoint lastSwingLow;     // 最近摆动低点
-        private boolean isBreakingHigh;      // 是否突破摆动高点
+        private boolean isBreakingHigh;      // 是否突破摆动高点（做多信号）
+        private boolean isBreakingLow;       // 🔥 P1新增：是否跌破摆动低点（做空信号）
         private boolean isNearSupport;       // 是否接近支撑位
     }
     

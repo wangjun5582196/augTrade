@@ -1,5 +1,6 @@
 package com.ltp.peter.augtrade.strategy.core;
 
+import com.ltp.peter.augtrade.entity.Kline;
 import com.ltp.peter.augtrade.indicator.*;
 import com.ltp.peter.augtrade.ml.MLPrediction;
 import com.ltp.peter.augtrade.ml.MLPredictionEnhancedService;
@@ -234,6 +235,14 @@ public class CompositeStrategy implements Strategy {
                 */
                 log.info("[{}] ℹ️ ML过滤器已禁用，使用传统技术指标策略", STRATEGY_NAME);
                 
+                // 🔥 P1优化-20260310: HMA趋势过滤器（做多信号检查）
+                HMACalculator.HMAResult hma = context.getIndicator("HMA");
+                if (hma != null && "DOWN".equals(hma.getTrend())) {
+                    log.warn("[{}] ⚠️ HMA下跌趋势，做多信号被否决 (HMA={}, 斜率={:.4f}%)", 
+                            STRATEGY_NAME, hma.getHma20(), hma.getSlope() * 100);
+                    return createHoldSignal("HMA趋势相反，拒绝做多", buyScore, sellScore);
+                }
+                
                 // 🔥 新增-20260309: 填充新指标数据到TradingSignal
                 TradingSignal.TradingSignalBuilder builder = TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
@@ -309,6 +318,14 @@ public class CompositeStrategy implements Strategy {
                             STRATEGY_NAME, sellScore, shortStrengthThreshold);
                     return createHoldSignal(String.format("做空需要多策略共识≥%d分（当前%d分）", shortStrengthThreshold, sellScore), 
                             buyScore, sellScore);
+                }
+                
+                // 🔥 P1优化-20260310: HMA趋势过滤器（做空信号检查）
+                HMACalculator.HMAResult hma = context.getIndicator("HMA");
+                if (hma != null && "UP".equals(hma.getTrend())) {
+                    log.warn("[{}] ⚠️ HMA上涨趋势，做空信号被否决 (HMA={}, 斜率={:.4f}%)", 
+                            STRATEGY_NAME, hma.getHma20(), hma.getSlope() * 100);
+                    return createHoldSignal("HMA趋势相反，拒绝做空", buyScore, sellScore);
                 }
                 
                 // 🔥 新增-20260309: 填充新指标数据到TradingSignal
@@ -705,14 +722,30 @@ public class CompositeStrategy implements Strategy {
     }
     
     /**
-     * 🔥 新增-20260309: 计算新指标评分（优化版方案C）
+     * 🔥 新增-20260309 + 优化-20260310: 计算新指标评分（优化版方案C + P0/P1/P2优化）
      * 
      * 集成4个新指标：动量、成交量突破、摆动点、HMA
-     * 权重分配：
-     * - 价格动量(Momentum): 做多/做空各4分
-     * - 成交量突破(Volume): 5分（放量支持交易）
-     * - 摆动点(SwingPoint): 做多7分（突破高点）/做空支撑（接近低点但暂不评分）
-     * - HMA趋势(HMA): 不直接评分，用于趋势确认
+     * 
+     * 🔥 P0修复-20260310:
+     * - 动量增加0.2%阈值
+     * - 摆动点增加时效性检查（15分钟内有效）
+     * - 增加指标冲突检测
+     * 
+     * 🔥 P1优化-20260310:
+     * - 成交量改用当前K线方向判断（更实时）
+     * - 摆动点平衡做多/做空权重（各7分）
+     * - HMA改为过滤器（在主逻辑中使用）
+     * 
+     * 🔥 P2优化-20260310:
+     * - 信号质量分级（A/B/C/D级）
+     * - 一致性奖励
+     * 
+     * 权重分配（优化后）：
+     * - 价格动量(Momentum): 做多/做空各4分（需>0.2%）
+     * - 成交量突破(Volume): 5分（放量+K线方向一致）
+     * - 摆动点(SwingPoint): 做多7分（突破高点）/做空7分（跌破低点）
+     * - HMA趋势: 作为过滤器，不直接评分
+     * - 一致性奖励: 3-5分（3-4个指标一致时）
      */
     private IndicatorScoreResult calculateNewIndicatorsScore(MarketContext context) {
         int buyScore = 0;
@@ -720,21 +753,31 @@ public class CompositeStrategy implements Strategy {
         List<String> buyReasons = new ArrayList<>();
         List<String> sellReasons = new ArrayList<>();
         
+        // 🔥 P2优化-20260310: 统计指标方向，用于冲突检测和一致性奖励
+        int bullishCount = 0;   // 看涨指标数量
+        int bearishCount = 0;   // 看跌指标数量
+        
         try {
-            // 1. 价格动量评分 (权重: 4分)
+            // 1. 价格动量评分 (权重: 4分) - 🔥 P0优化：已增加0.2%阈值
             if (momentumCalculator != null) {
                 MomentumCalculator.MomentumResult momentum = momentumCalculator.calculate(context.getKlines());
                 if (momentum != null) {
                     if (momentum.isStrongUp()) {
                         buyScore += 4;
-                        buyReasons.add("强劲上涨动量(4分)");
-                        log.info("[{}] 📈 动量指标: 强劲上涨 (M2={}, M5={})", 
-                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum5());
+                        bullishCount++;  // 🔥 P2: 统计看涨指标
+                        buyReasons.add(String.format("强劲上涨动量(4分,M2=%.2f%%,M5=%.2f%%)", 
+                                momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
+                        log.info("[{}] 📈 动量指标: 强劲上涨 (M2={} +{:.2f}%, M5={} +{:.2f}%)", 
+                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum2Ratio() * 100,
+                                momentum.getMomentum5(), momentum.getMomentum5Ratio() * 100);
                     } else if (momentum.isStrongDown()) {
                         sellScore += 4;
-                        sellReasons.add("强劲下跌动量(4分)");
-                        log.info("[{}] 📉 动量指标: 强劲下跌 (M2={}, M5={})", 
-                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum5());
+                        bearishCount++;  // 🔥 P2: 统计看跌指标
+                        sellReasons.add(String.format("强劲下跌动量(4分,M2=%.2f%%,M5=%.2f%%)", 
+                                momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
+                        log.info("[{}] 📉 动量指标: 强劲下跌 (M2={} {:.2f}%, M5={} {:.2f}%)", 
+                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum2Ratio() * 100,
+                                momentum.getMomentum5(), momentum.getMomentum5Ratio() * 100);
                     }
                     
                     // 将动量数据存入context供后续使用
@@ -742,26 +785,27 @@ public class CompositeStrategy implements Strategy {
                 }
             }
             
-            // 2. 成交量突破评分 (权重: 5分)
+            // 2. 成交量突破评分 (权重: 5分) - 🔥 P1优化：改用当前K线方向判断
             if (volumeBreakoutCalculator != null) {
                 VolumeBreakoutCalculator.VolumeBreakoutResult volume = 
                         volumeBreakoutCalculator.calculate(context.getKlines());
                 if (volume != null && volume.isBreakout()) {
-                    // 放量时，支持当前价格方向
-                    // 需要配合动量判断方向
-                    MomentumCalculator.MomentumResult momentum = context.getIndicator("Momentum");
-                    if (momentum != null) {
-                        if (momentum.getMomentum2().compareTo(BigDecimal.ZERO) > 0) {
-                            buyScore += 5;
-                            buyReasons.add(String.format("放量突破(5分,比率%.2f)", volume.getVolumeRatio()));
-                            log.info("[{}] 📊 成交量突破: 放量上涨 (比率={:.2f})", 
-                                    STRATEGY_NAME, volume.getVolumeRatio());
-                        } else if (momentum.getMomentum2().compareTo(BigDecimal.ZERO) < 0) {
-                            sellScore += 5;
-                            sellReasons.add(String.format("放量突破(5分,比率%.2f)", volume.getVolumeRatio()));
-                            log.info("[{}] 📊 成交量突破: 放量下跌 (比率={:.2f})", 
-                                    STRATEGY_NAME, volume.getVolumeRatio());
-                        }
+                    // 🔥 P1优化-20260310: 使用当前K线方向判断（更实时）
+                    Kline currentKline = context.getKlines().get(0);
+                    BigDecimal klineChange = currentKline.getClosePrice().subtract(currentKline.getOpenPrice());
+                    
+                    if (klineChange.compareTo(BigDecimal.ZERO) > 0) {
+                        buyScore += 5;
+                        bullishCount++;  // 🔥 P2: 统计看涨指标
+                        buyReasons.add(String.format("放量阳线(5分,比率%.2f)", volume.getVolumeRatio()));
+                        log.info("[{}] 📊 成交量突破: 放量阳线 (比率={:.2f}, K线涨幅={})", 
+                                STRATEGY_NAME, volume.getVolumeRatio(), klineChange);
+                    } else if (klineChange.compareTo(BigDecimal.ZERO) < 0) {
+                        sellScore += 5;
+                        bearishCount++;  // 🔥 P2: 统计看跌指标
+                        sellReasons.add(String.format("放量阴线(5分,比率%.2f)", volume.getVolumeRatio()));
+                        log.info("[{}] 📊 成交量突破: 放量阴线 (比率={:.2f}, K线跌幅={})", 
+                                STRATEGY_NAME, volume.getVolumeRatio(), klineChange);
                     }
                     
                     // 将成交量数据存入context
@@ -769,22 +813,34 @@ public class CompositeStrategy implements Strategy {
                 }
             }
             
-            // 3. 摆动点评分 (做多权重: 7分)
+            // 3. 摆动点评分 - 🔥 P0优化：时效性检查；P1优化：平衡做多/做空权重
             if (swingPointCalculator != null) {
                 SwingPointCalculator.SwingPointResult swingPoint = 
                         swingPointCalculator.calculate(context.getKlines());
                 if (swingPoint != null) {
-                    // 突破摆动高点 = 强烈做多信号
+                    // 🔥 P0+P1优化：突破摆动高点 = 强烈做多信号（已增加15分钟时效性和0.3%幅度检查）
                     if (swingPoint.isBreakingHigh()) {
                         buyScore += 7;
+                        bullishCount++;  // 🔥 P2: 统计看涨指标
                         buyReasons.add("突破摆动高点(7分)");
-                        log.info("[{}] 🚀 摆动点: 突破高点 (高点={})", 
+                        log.info("[{}] 🚀 摆动点: 有效突破高点 (高点={})", 
                                 STRATEGY_NAME, 
                                 swingPoint.getLastSwingHigh() != null ? 
                                         swingPoint.getLastSwingHigh().getPrice() : "N/A");
                     }
                     
-                    // 接近摆动低点支撑 = 潜在做多机会（但需配合其他信号，暂不评分）
+                    // 🔥 P1新增-20260310: 跌破摆动低点 = 强烈做空信号（权重平衡）
+                    if (swingPoint.isBreakingLow()) {
+                        sellScore += 7;
+                        bearishCount++;  // 🔥 P2: 统计看跌指标
+                        sellReasons.add("跌破摆动低点(7分)");
+                        log.info("[{}] 📉 摆动点: 有效跌破低点 (低点={})", 
+                                STRATEGY_NAME, 
+                                swingPoint.getLastSwingLow() != null ? 
+                                        swingPoint.getLastSwingLow().getPrice() : "N/A");
+                    }
+                    
+                    // 接近摆动低点支撑（仅记录，不评分）
                     if (swingPoint.isNearSupport()) {
                         log.info("[{}] 📍 摆动点: 接近支撑位 (低点={})", 
                                 STRATEGY_NAME, 
@@ -797,7 +853,7 @@ public class CompositeStrategy implements Strategy {
                 }
             }
             
-            // 4. HMA趋势确认 (不直接评分，用于过滤和确认)
+            // 4. HMA趋势 - 🔥 P1优化：移除评分，改为在主逻辑中作为过滤器使用
             if (hmaCalculator != null) {
                 HMACalculator.HMAResult hma = hmaCalculator.calculate(context.getKlines());
                 if (hma != null) {
@@ -805,18 +861,70 @@ public class CompositeStrategy implements Strategy {
                             STRATEGY_NAME, hma.getTrend(), hma.getSlope(),
                             hma.isPriceAboveHMA() ? "在上方" : "在下方");
                     
-                    // HMA趋势与交易方向一致时，增加少量权重（2分）
-                    if ("UP".equals(hma.getTrend()) && hma.isPriceAboveHMA() && buyScore > 0) {
-                        buyScore += 2;
-                        buyReasons.add("HMA上涨趋势(2分)");
-                    } else if ("DOWN".equals(hma.getTrend()) && !hma.isPriceAboveHMA() && sellScore > 0) {
-                        sellScore += 2;
-                        sellReasons.add("HMA下跌趋势(2分)");
+                    // 🔥 P1优化-20260310: HMA不直接评分，但统计方向用于冲突检测
+                    if ("UP".equals(hma.getTrend()) && hma.isPriceAboveHMA()) {
+                        bullishCount++;  // 统计但不评分
+                    } else if ("DOWN".equals(hma.getTrend()) && !hma.isPriceAboveHMA()) {
+                        bearishCount++;  // 统计但不评分
                     }
                     
-                    // 将HMA数据存入context
+                    // 将HMA数据存入context（供主逻辑使用作为过滤器）
                     context.addIndicator("HMA", hma);
                 }
+            }
+            
+            // 🔥 P0修复-20260310: 指标冲突检测
+            int totalSignals = bullishCount + bearishCount;
+            if (bullishCount > 0 && bearishCount > 0) {
+                log.warn("[{}] ⚠️ 新指标信号冲突: {}个看涨 vs {}个看跌，拒绝评分", 
+                        STRATEGY_NAME, bullishCount, bearishCount);
+                return IndicatorScoreResult.builder()
+                        .buyScore(0)
+                        .sellScore(0)
+                        .buyReasons(List.of("指标方向冲突，拒绝信号"))
+                        .sellReasons(List.of("指标方向冲突，拒绝信号"))
+                        .signalQuality("D")  // D级：冲突信号
+                        .build();
+            }
+            
+            // 🔥 P2优化-20260310: 信号质量分级和一致性奖励
+            String signalQuality = "C";  // 默认C级
+            int consistencyBonus = 0;
+            
+            if (totalSignals >= 4) {
+                // A级：4个指标一致（最高质量）
+                signalQuality = "A";
+                consistencyBonus = 5;
+                if (bullishCount == totalSignals) {
+                    buyScore += consistencyBonus;
+                    buyReasons.add("4指标高度一致(+5分)");
+                    log.info("[{}] 🌟 信号质量A级: 4个指标完全一致(做多)", STRATEGY_NAME);
+                } else {
+                    sellScore += consistencyBonus;
+                    sellReasons.add("4指标高度一致(+5分)");
+                    log.info("[{}] 🌟 信号质量A级: 4个指标完全一致(做空)", STRATEGY_NAME);
+                }
+            } else if (totalSignals == 3) {
+                // B级：3个指标一致（高质量）
+                signalQuality = "B";
+                consistencyBonus = 3;
+                if (bullishCount == 3) {
+                    buyScore += consistencyBonus;
+                    buyReasons.add("3指标一致(+3分)");
+                    log.info("[{}] ⭐ 信号质量B级: 3个指标一致(做多)", STRATEGY_NAME);
+                } else {
+                    sellScore += consistencyBonus;
+                    sellReasons.add("3指标一致(+3分)");
+                    log.info("[{}] ⭐ 信号质量B级: 3个指标一致(做空)", STRATEGY_NAME);
+                }
+            } else if (totalSignals == 2) {
+                // C级：2个指标（中等质量，正常评分）
+                signalQuality = "C";
+                log.info("[{}] 📊 信号质量C级: 2个指标支持", STRATEGY_NAME);
+            } else if (totalSignals == 1) {
+                // C-级：单个指标（较低质量）
+                signalQuality = "C-";
+                log.info("[{}] ⚠️ 信号质量C-级: 仅1个指标支持", STRATEGY_NAME);
             }
             
             return IndicatorScoreResult.builder()
@@ -824,6 +932,10 @@ public class CompositeStrategy implements Strategy {
                     .sellScore(sellScore)
                     .buyReasons(buyReasons)
                     .sellReasons(sellReasons)
+                    .signalQuality(signalQuality)
+                    .indicatorCount(totalSignals)
+                    .bullishCount(bullishCount)
+                    .bearishCount(bearishCount)
                     .build();
             
         } catch (Exception e) {
@@ -834,14 +946,20 @@ public class CompositeStrategy implements Strategy {
     
     /**
      * 新指标评分结果
+     * 
+     * 🔥 P2优化-20260310: 增加信号质量等级
      */
     @lombok.Data
     @lombok.Builder
     private static class IndicatorScoreResult {
-        private int buyScore;
-        private int sellScore;
-        private List<String> buyReasons;
-        private List<String> sellReasons;
+        private int buyScore;           // 做多评分
+        private int sellScore;          // 做空评分
+        private List<String> buyReasons;   // 做多理由
+        private List<String> sellReasons;  // 做空理由
+        private String signalQuality;   // 🔥 P2新增：信号质量(A/B/C/C-/D)
+        private int indicatorCount;     // 🔥 P2新增：有信号的指标总数
+        private int bullishCount;       // 🔥 P2新增：看涨指标数量
+        private int bearishCount;       // 🔥 P2新增：看跌指标数量
     }
     
     /**
