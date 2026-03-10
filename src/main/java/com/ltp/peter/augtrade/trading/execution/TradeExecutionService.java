@@ -632,35 +632,80 @@ public class TradeExecutionService {
     }
     
     /**
-     * 🔥 新增-20260310: 填充信号追踪数据到订单
+     * 🔥 新增-20260310: 填充信号追踪数据到订单（完整版）
      * 
-     * 从TradingSignal中提取新指标数据并填充到TradeOrder中
+     * 从TradingSignal中提取所有技术指标数据并填充到TradeOrder中
      * 
      * @param order 订单对象
      * @param signal 交易信号对象
      */
     private void fillSignalDataToOrder(TradeOrder order, TradingSignal signal) {
         try {
-            // 信号评分
+            // ========== 基础信号数据 ==========
             order.setBuyScore(signal.getBuyScore());
             order.setSellScore(signal.getSellScore());
             
-            // 信号理由（转为JSON字符串）
+            // 信号理由（转为字符串）
             if (signal.getBuyReasons() != null && !signal.getBuyReasons().isEmpty()) {
                 order.setSignalReasons(String.join(", ", signal.getBuyReasons()));
             } else if (signal.getSellReasons() != null && !signal.getSellReasons().isEmpty()) {
                 order.setSignalReasons(String.join(", ", signal.getSellReasons()));
             }
             
-            // 动量指标
+            // ========== Williams R & ADX ==========
+            if (signal.getWilliamsR() != null) {
+                order.setWilliamsR(BigDecimal.valueOf(signal.getWilliamsR()));
+            }
+            if (signal.getAdx() != null) {
+                order.setAdx(BigDecimal.valueOf(signal.getAdx()));
+            }
+            
+            // ========== EMA均线 ==========
+            order.setEma20(signal.getEma20());
+            order.setEma50(signal.getEma50());
+            
+            // ========== ATR波动率 ==========
+            order.setAtr(signal.getAtr());
+            
+            // ========== K线形态 ==========
+            order.setCandlePattern(signal.getCandlePattern());
+            order.setCandlePatternStrength(signal.getCandlePatternStrength());
+            
+            // ========== 布林带 ==========
+            order.setBollingerUpper(signal.getBollingerUpper());
+            order.setBollingerMiddle(signal.getBollingerMiddle());
+            order.setBollingerLower(signal.getBollingerLower());
+            
+            // ========== 信号强度 & 市场状态 ==========
+            order.setSignalStrength(signal.getSignalStrength());
+            order.setMarketRegime(signal.getMarketRegime());
+            
+            // ========== ML预测 ==========
+            order.setMlPrediction(signal.getMlPrediction());
+            order.setMlConfidence(signal.getMlConfidence());
+            
+            // ========== VWAP ==========
+            order.setVwap(signal.getVwap());
+            order.setVwapDeviation(signal.getVwapDeviation());
+            
+            // ========== Supertrend ==========
+            order.setSupertrendValue(signal.getSupertrendValue());
+            order.setSupertrendDirection(signal.getSupertrendDirection());
+            
+            // ========== OBV ==========
+            order.setObvTrend(signal.getObvTrend());
+            order.setObvVolumeConfirmed(signal.getObvVolumeConfirmed());
+            
+            // ========== 动量指标 ==========
             order.setMomentum2(signal.getMomentum2());
             order.setMomentum5(signal.getMomentum5());
             
-            // 成交量指标
+            // ========== 成交量指标 ==========
             order.setVolumeRatio(signal.getVolumeRatio());
-            // currentVolume和avgVolume可以从volumeBreakout计算得出，这里暂时不设置
+            order.setCurrentVolume(signal.getCurrentVolume());
+            order.setAvgVolume(signal.getAvgVolume());
             
-            // 摆动点指标
+            // ========== 摆动点指标 ==========
             order.setSwingHigh(signal.getLastSwingHigh());
             order.setSwingLow(signal.getLastSwingLow());
             
@@ -674,22 +719,32 @@ public class TradeExecutionService {
                 }
             }
             
-            // HMA指标
+            // ========== HMA指标 ==========
             order.setHma20(signal.getHma20());
             if (signal.getHma20Slope() != null) {
                 order.setHmaSlope(BigDecimal.valueOf(signal.getHma20Slope()));
             }
-            // hmaTrend可以从hmaSlope推导，这里暂时不设置
             
-            // 市场状态快照
+            // HMA趋势方向（从斜率推导）
+            if (signal.getHma20Slope() != null) {
+                if (signal.getHma20Slope() > 0.1) {
+                    order.setHmaTrend("UP");
+                } else if (signal.getHma20Slope() < -0.1) {
+                    order.setHmaTrend("DOWN");
+                } else {
+                    order.setHmaTrend("SIDEWAYS");
+                }
+            }
+            
+            // ========== 市场状态快照 ==========
             order.setPricePosition(signal.getPricePosition());
             order.setTrendConfirmed(signal.getTrendConfirmed());
             
-            log.debug("[TradeExecutionService] 信号追踪数据已填充 - buyScore:{}, sellScore:{}, momentum2:{}, momentum5:{}", 
-                    signal.getBuyScore(), signal.getSellScore(), signal.getMomentum2(), signal.getMomentum5());
+            log.debug("✅ 信号追踪数据已填充 - Williams R:{}, ADX:{}, buyScore:{}, sellScore:{}", 
+                    signal.getWilliamsR(), signal.getAdx(), signal.getBuyScore(), signal.getSellScore());
             
         } catch (Exception e) {
-            log.error("[TradeExecutionService] 填充信号追踪数据失败", e);
+            log.error("❌ 填充信号追踪数据失败", e);
         }
     }
     

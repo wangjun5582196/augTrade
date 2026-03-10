@@ -103,6 +103,118 @@ public class TradingSignal {
      */
     private LocalDateTime signalGenerateTime;
     
+    // ==================== 🔥 新增-20260310：完整技术指标字段 ====================
+    
+    /**
+     * Williams %R指标值
+     */
+    private Double williamsR;
+    
+    /**
+     * ADX趋势强度指标值
+     */
+    private Double adx;
+    
+    /**
+     * EMA20均线值
+     */
+    private BigDecimal ema20;
+    
+    /**
+     * EMA50均线值
+     */
+    private BigDecimal ema50;
+    
+    /**
+     * ATR波动率指标值
+     */
+    private BigDecimal atr;
+    
+    /**
+     * K线形态类型
+     */
+    private String candlePattern;
+    
+    /**
+     * K线形态强度(0-10)
+     */
+    private Integer candlePatternStrength;
+    
+    /**
+     * 布林带上轨
+     */
+    private Double bollingerUpper;
+    
+    /**
+     * 布林带中轨
+     */
+    private Double bollingerMiddle;
+    
+    /**
+     * 布林带下轨
+     */
+    private Double bollingerLower;
+    
+    /**
+     * 信号强度(0-100)
+     */
+    private Integer signalStrength;
+    
+    /**
+     * 市场状态: STRONG_TREND/WEAK_TREND/RANGING/CHOPPY
+     */
+    private String marketRegime;
+    
+    /**
+     * ML预测值(0-1)
+     */
+    private BigDecimal mlPrediction;
+    
+    /**
+     * ML置信度(0-1)
+     */
+    private BigDecimal mlConfidence;
+    
+    /**
+     * VWAP值
+     */
+    private BigDecimal vwap;
+    
+    /**
+     * 价格偏离VWAP百分比
+     */
+    private BigDecimal vwapDeviation;
+    
+    /**
+     * Supertrend线的值
+     */
+    private BigDecimal supertrendValue;
+    
+    /**
+     * Supertrend趋势方向：UP/DOWN
+     */
+    private String supertrendDirection;
+    
+    /**
+     * OBV趋势方向（正=看涨，负=看跌）
+     */
+    private BigDecimal obvTrend;
+    
+    /**
+     * OBV是否量价确认：1=确认，0=未确认
+     */
+    private Integer obvVolumeConfirmed;
+    
+    /**
+     * 当前成交量
+     */
+    private BigDecimal currentVolume;
+    
+    /**
+     * 20周期平均成交量
+     */
+    private BigDecimal avgVolume;
+    
     // ==================== 原有字段 ====================
     
     /**
