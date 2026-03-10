@@ -5,6 +5,7 @@ import com.ltp.peter.augtrade.entity.TradeOrder;
 import com.ltp.peter.augtrade.mapper.PositionMapper;
 import com.ltp.peter.augtrade.mapper.TradeOrderMapper;
 import com.ltp.peter.augtrade.market.MarketDataService;
+import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import com.ltp.peter.augtrade.trading.risk.RiskManagementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,10 +63,10 @@ public class TradeExecutionService {
     private BigDecimal maxSingleLoss;
     
     /**
-     * 执行买入交易（高波动版本：使用固定止损止盈）
+     * 🔥 新增-20260310: 执行买入交易（带信号追踪）
      */
     @Transactional
-    public TradeOrder executeBuy(String symbol, BigDecimal quantity, String strategyName) {
+    public TradeOrder executeBuy(String symbol, BigDecimal quantity, String strategyName, TradingSignal signal) {
         log.info("执行买入交易 - 交易对: {}, 数量: {}, 策略: {}", symbol, quantity, strategyName);
         
         // 风控检查
@@ -103,6 +104,11 @@ public class TradeExecutionService {
         order.setUpdateTime(LocalDateTime.now());
         order.setExecutedTime(LocalDateTime.now());
         
+        // 🔥 新增-20260310: 填充信号追踪数据
+        if (signal != null) {
+            fillSignalDataToOrder(order, signal);
+        }
+        
         tradeOrderMapper.insert(order);
         
         // 创建持仓
@@ -129,10 +135,10 @@ public class TradeExecutionService {
     }
     
     /**
-     * 执行做空交易（开空仓）
+     * 🔥 新增-20260310: 执行做空交易（带信号追踪）
      */
     @Transactional
-    public TradeOrder executeSellShort(String symbol, BigDecimal quantity, String strategyName) {
+    public TradeOrder executeSellShort(String symbol, BigDecimal quantity, String strategyName, TradingSignal signal) {
         log.info("执行做空交易（开空仓） - 交易对: {}, 数量: {}, 策略: {}", symbol, quantity, strategyName);
         
         // 风控检查
@@ -169,6 +175,11 @@ public class TradeExecutionService {
         order.setCreateTime(LocalDateTime.now());
         order.setUpdateTime(LocalDateTime.now());
         order.setExecutedTime(LocalDateTime.now());
+        
+        // 🔥 新增-20260310: 填充信号追踪数据
+        if (signal != null) {
+            fillSignalDataToOrder(order, signal);
+        }
         
         tradeOrderMapper.insert(order);
         
@@ -618,5 +629,83 @@ public class TradeExecutionService {
         }
         
         return false;
+    }
+    
+    /**
+     * 🔥 新增-20260310: 填充信号追踪数据到订单
+     * 
+     * 从TradingSignal中提取新指标数据并填充到TradeOrder中
+     * 
+     * @param order 订单对象
+     * @param signal 交易信号对象
+     */
+    private void fillSignalDataToOrder(TradeOrder order, TradingSignal signal) {
+        try {
+            // 信号评分
+            order.setBuyScore(signal.getBuyScore());
+            order.setSellScore(signal.getSellScore());
+            
+            // 信号理由（转为JSON字符串）
+            if (signal.getBuyReasons() != null && !signal.getBuyReasons().isEmpty()) {
+                order.setSignalReasons(String.join(", ", signal.getBuyReasons()));
+            } else if (signal.getSellReasons() != null && !signal.getSellReasons().isEmpty()) {
+                order.setSignalReasons(String.join(", ", signal.getSellReasons()));
+            }
+            
+            // 动量指标
+            order.setMomentum2(signal.getMomentum2());
+            order.setMomentum5(signal.getMomentum5());
+            
+            // 成交量指标
+            order.setVolumeRatio(signal.getVolumeRatio());
+            // currentVolume和avgVolume可以从volumeBreakout计算得出，这里暂时不设置
+            
+            // 摆动点指标
+            order.setSwingHigh(signal.getLastSwingHigh());
+            order.setSwingLow(signal.getLastSwingLow());
+            
+            // 计算价格距离摆动点的距离
+            if (signal.getCurrentPrice() != null) {
+                if (signal.getLastSwingHigh() != null) {
+                    order.setSwingHighDistance(signal.getCurrentPrice().subtract(signal.getLastSwingHigh()));
+                }
+                if (signal.getLastSwingLow() != null) {
+                    order.setSwingLowDistance(signal.getCurrentPrice().subtract(signal.getLastSwingLow()));
+                }
+            }
+            
+            // HMA指标
+            order.setHma20(signal.getHma20());
+            if (signal.getHma20Slope() != null) {
+                order.setHmaSlope(BigDecimal.valueOf(signal.getHma20Slope()));
+            }
+            // hmaTrend可以从hmaSlope推导，这里暂时不设置
+            
+            // 市场状态快照
+            order.setPricePosition(signal.getPricePosition());
+            order.setTrendConfirmed(signal.getTrendConfirmed());
+            
+            log.debug("[TradeExecutionService] 信号追踪数据已填充 - buyScore:{}, sellScore:{}, momentum2:{}, momentum5:{}", 
+                    signal.getBuyScore(), signal.getSellScore(), signal.getMomentum2(), signal.getMomentum5());
+            
+        } catch (Exception e) {
+            log.error("[TradeExecutionService] 填充信号追踪数据失败", e);
+        }
+    }
+    
+    /**
+     * 🔥 兼容方法-20260310: 保留原有方法签名，内部调用新方法
+     */
+    @Transactional
+    public TradeOrder executeBuy(String symbol, BigDecimal quantity, String strategyName) {
+        return executeBuy(symbol, quantity, strategyName, null);
+    }
+    
+    /**
+     * 🔥 兼容方法-20260310: 保留原有方法签名，内部调用新方法
+     */
+    @Transactional
+    public TradeOrder executeSellShort(String symbol, BigDecimal quantity, String strategyName) {
+        return executeSellShort(symbol, quantity, strategyName, null);
     }
 }
