@@ -197,6 +197,8 @@ public class MarketDataService {
      * 删除当天的K线数据
      * 用于启动时清理旧数据，确保重新获取最新的K线
      * 
+     * 🔥 优化：不仅删除当天数据，还删除所有非标准时间点的K线（如35分、37分）
+     * 
      * @param symbol 交易对
      * @param interval K线周期
      * @return 删除的记录数
@@ -219,10 +221,63 @@ public class MarketDataService {
             );
             
             log.info("🗑️ 删除{}今天的K线数据：{} 条（周期：{}）", symbol, deletedCount, interval);
+            
+            // 🔥 额外清理：删除所有非标准5分钟时间点的K线（如35分、37分等）
+            if ("5m".equals(interval)) {
+                int invalidCount = deleteInvalidTimeKlines(symbol, interval);
+                if (invalidCount > 0) {
+                    log.info("🗑️ 额外删除非标准时间点的K线：{} 条", invalidCount);
+                }
+            }
+            
             return deletedCount;
             
         } catch (Exception e) {
             log.error("删除今天K线数据失败", e);
+            return 0;
+        }
+    }
+    
+    /**
+     * 删除非标准时间点的K线数据
+     * 5分钟K线应该在00、05、10、15、20、25、30、35、40、45、50、55分
+     * 删除其他时间点的K线（如01分、37分等）
+     * 
+     * @param symbol 交易对
+     * @param interval K线周期
+     * @return 删除的记录数
+     */
+    private int deleteInvalidTimeKlines(String symbol, String interval) {
+        try {
+            // 查询所有该交易对的K线
+            List<Kline> allKlines = klineMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Kline>()
+                    .eq(Kline::getSymbol, symbol)
+                    .eq(Kline::getInterval, interval)
+            );
+            
+            int deletedCount = 0;
+            
+            // 检查每条K线的分钟数是否是5的倍数
+            for (Kline kline : allKlines) {
+                int minute = kline.getTimestamp().getMinute();
+                
+                // 如果分钟数不是5的倍数，删除这条记录
+                if (minute % 5 != 0) {
+                    klineMapper.deleteById(kline.getId());
+                    deletedCount++;
+                    log.debug("删除非标准时间K线: {} {}:{} (分钟数{}不是5的倍数)", 
+                            symbol, 
+                            kline.getTimestamp().getHour(), 
+                            kline.getTimestamp().getMinute(),
+                            minute);
+                }
+            }
+            
+            return deletedCount;
+            
+        } catch (Exception e) {
+            log.error("删除非标准时间K线失败", e);
             return 0;
         }
     }

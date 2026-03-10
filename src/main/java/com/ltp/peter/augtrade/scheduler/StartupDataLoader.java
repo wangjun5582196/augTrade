@@ -35,6 +35,9 @@ public class StartupDataLoader implements ApplicationRunner {
     @Autowired(required = false)
     private com.ltp.peter.augtrade.trading.broker.BinanceFuturesTradingService binanceFuturesService;
     
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.market.BinanceHistoricalDataFetcher binanceHistoricalDataFetcher;
+    
     @Autowired
     private MarketDataService marketDataService;
     
@@ -115,28 +118,88 @@ public class StartupDataLoader implements ApplicationRunner {
      * 🔥 新增：加载币安数据
      */
     private void loadBinanceData() throws Exception {
+        // 计算当天的K线数量（从0点到现在）
+        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
+        LocalDateTime now = LocalDateTime.now();
+        long minutesSinceMidnight = java.time.Duration.between(todayStart, now).toMinutes();
+        int todayKlineCount = (int) (minutesSinceMidnight / 5) + 10; // 5分钟一条，额外加10条确保覆盖
+        
+        log.info("📊 开始获取{}当天的K线数据（约{}条，5分钟周期）", binanceFuturesSymbol, todayKlineCount);
+        
+        try {
+            // 🔥 先删除当天的K线数据，确保数据是最新的
+            log.info("🗑️ 清理当天旧数据...");
+            int deletedCount = marketDataService.deleteTodayKlines(binanceFuturesSymbol, "5m");
+            if (deletedCount > 0) {
+                log.info("✅ 已删除当天旧K线数据：{} 条", deletedCount);
+            } else {
+                log.info("ℹ️ 当天暂无旧数据需要删除");
+            }
+            
+            // 🔥 使用BinanceHistoricalDataFetcher获取历史K线
+            if (binanceHistoricalDataFetcher != null) {
+                log.info("📥 使用BinanceHistoricalDataFetcher获取当天历史K线数据...");
+                // 获取当天0点的时间戳
+                long startTime = todayStart.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                long endTime = now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                int fetchedCount = binanceHistoricalDataFetcher.fetchHistoricalKlines(
+                    binanceFuturesSymbol, "5m", startTime, endTime
+                );
+                log.info("✅ 成功获取并保存{}条K线数据", fetchedCount);
+            } else {
+                log.warn("⚠️ BinanceHistoricalDataFetcher未初始化，创建初始K线记录");
+                BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+                Kline kline = new Kline();
+                kline.setSymbol(binanceFuturesSymbol);
+                kline.setInterval("5m");
+                kline.setTimestamp(LocalDateTime.now());
+                kline.setOpenPrice(currentPrice);
+                kline.setHighPrice(currentPrice);
+                kline.setLowPrice(currentPrice);
+                kline.setClosePrice(currentPrice);
+                kline.setVolume(BigDecimal.ZERO);
+                kline.setCreateTime(LocalDateTime.now());
+                kline.setUpdateTime(LocalDateTime.now());
+                marketDataService.saveKline(kline);
+            }
+            
+            // 显示最新的价格信息
+            displayBinanceLatestPrice();
+            
+            log.info("✅ 币安数据加载完成！系统已准备好开始交易");
+            
+        } catch (Exception e) {
+            log.error("❌ 获取币安K线数据失败", e);
+            throw e;
+        }
+    }
+    
+    /**
+     * 显示币安最新价格信息
+     */
+    private void displayBinanceLatestPrice() {
         try {
             BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
-            log.info("💰 币安当前{}价格: ${}", binanceFuturesSymbol, currentPrice);
+            log.info("💰 当前{}价格: ${}", binanceFuturesSymbol, currentPrice);
             
-            // 简化处理：创建初始K线
-            Kline kline = new Kline();
-            kline.setSymbol(binanceFuturesSymbol);
-            kline.setInterval("5m");
-            kline.setTimestamp(LocalDateTime.now());
-            kline.setOpenPrice(currentPrice);
-            kline.setHighPrice(currentPrice);
-            kline.setLowPrice(currentPrice);
-            kline.setClosePrice(currentPrice);
-            kline.setVolume(BigDecimal.ZERO);
-            kline.setCreateTime(LocalDateTime.now());
-            kline.setUpdateTime(LocalDateTime.now());
-            
-            marketDataService.saveKline(kline);
-            log.info("✅ 币安数据加载完成！系统已准备好开始交易");
+            // 获取最新的几条K线显示趋势
+            java.util.List<Kline> latestKlines = marketDataService.getLatestKlines(binanceFuturesSymbol, "5m", 5);
+            if (latestKlines != null && !latestKlines.isEmpty()) {
+                log.info("📈 最近5条K线:");
+                for (int i = latestKlines.size() - 1; i >= 0; i--) {
+                    Kline k = latestKlines.get(i);
+                    String trend = k.getClosePrice().compareTo(k.getOpenPrice()) > 0 ? "📈" : "📉";
+                    log.info("   {} {} - O:${} H:${} L:${} C:${}", 
+                            trend,
+                            k.getTimestamp().toString().substring(11, 16),
+                            k.getOpenPrice(),
+                            k.getHighPrice(),
+                            k.getLowPrice(),
+                            k.getClosePrice());
+                }
+            }
         } catch (Exception e) {
-            log.error("❌ 币安数据加载失败", e);
-            throw e;
+            log.debug("显示价格信息失败: {}", e.getMessage());
         }
     }
     

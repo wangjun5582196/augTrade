@@ -526,13 +526,37 @@
             </div>
         </div>
 
-        <!-- Stats Overview -->
-        <div class="stats-grid">
+        <!-- Stats Overview - 优化排版 -->
+        <!-- 第一行：黄金价格 -->
+        <div style="display: grid; grid-template-columns: 1fr; gap: 15px; margin-bottom: 15px;">
             <div class="stat-card">
                 <h3>💰 黄金价格</h3>
                 <div class="value neutral" id="goldPrice">--</div>
-                <div class="sub-value">XAUTUSDT</div>
+                <div class="sub-value">XAUUSDT</div>
             </div>
+        </div>
+
+        <!-- 第二行：收益率指标（年/月/7日） -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 15px;">
+            <div class="stat-card">
+                <h3>📈 年收益率</h3>
+                <div class="value neutral" id="yearReturn">--</div>
+                <div class="sub-value" id="yearReturnSub">本金: $10,000</div>
+            </div>
+            <div class="stat-card">
+                <h3>📊 月收益率</h3>
+                <div class="value neutral" id="monthReturn">--</div>
+                <div class="sub-value" id="monthReturnSub">近30天</div>
+            </div>
+            <div class="stat-card">
+                <h3>⚡ 7日收益率</h3>
+                <div class="value neutral" id="weekReturn">--</div>
+                <div class="sub-value" id="weekReturnSub">近7天</div>
+            </div>
+        </div>
+
+        <!-- 第三行：今日数据 -->
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 15px;">
             <div class="stat-card">
                 <h3>今日盈亏</h3>
                 <div class="value neutral" id="todayPnl">--</div>
@@ -543,6 +567,10 @@
                 <div class="value neutral" id="todayWinRate">--</div>
                 <div class="sub-value" id="todayWinLoss">胜/负: --</div>
             </div>
+        </div>
+
+        <!-- 第四行：持仓和累计数据 -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px;">
             <div class="stat-card">
                 <h3>未实现盈亏</h3>
                 <div class="value neutral" id="unrealizedPnl">--</div>
@@ -671,6 +699,7 @@
         async function loadAllData() {
             await Promise.all([
                 loadOverview(),
+                loadReturns(),
                 loadPositions(),
                 loadStrategyStats(),
                 loadDailyPnl(),
@@ -693,6 +722,66 @@
             
             document.getElementById('lastUpdate').textContent = 
                 `最后更新: ${new Date().toLocaleString('zh-CN')}`;
+        }
+
+        // 🔥 新增：加载收益率数据
+        async function loadReturns() {
+            try {
+                const response = await fetch('/api/dashboard/returns');
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 年收益率
+                    const yearReturnElement = document.getElementById('yearReturn');
+                    const yearReturn = parseFloat(data.yearReturn);
+                    yearReturnElement.textContent = `${yearReturn >= 0 ? '+' : ''}${yearReturn.toFixed(2)}%`;
+                    yearReturnElement.className = 'value';
+                    if (yearReturn > 0) {
+                        yearReturnElement.classList.add('positive');
+                    } else if (yearReturn < 0) {
+                        yearReturnElement.classList.add('negative');
+                    } else {
+                        yearReturnElement.classList.add('neutral');
+                    }
+                    document.getElementById('yearReturnSub').textContent = 
+                        `盈亏: ${formatCurrency(data.yearPnl)} (${data.yearTrades}笔)`;
+                    
+                    // 月收益率
+                    const monthReturnElement = document.getElementById('monthReturn');
+                    const monthReturn = parseFloat(data.monthReturn);
+                    monthReturnElement.textContent = `${monthReturn >= 0 ? '+' : ''}${monthReturn.toFixed(2)}%`;
+                    monthReturnElement.className = 'value';
+                    if (monthReturn > 0) {
+                        monthReturnElement.classList.add('positive');
+                    } else if (monthReturn < 0) {
+                        monthReturnElement.classList.add('negative');
+                    } else {
+                        monthReturnElement.classList.add('neutral');
+                    }
+                    document.getElementById('monthReturnSub').textContent = 
+                        `盈亏: ${formatCurrency(data.monthPnl)} (${data.monthTrades}笔)`;
+                    
+                    // 7日收益率
+                    const weekReturnElement = document.getElementById('weekReturn');
+                    const weekReturn = parseFloat(data.weekReturn);
+                    weekReturnElement.textContent = `${weekReturn >= 0 ? '+' : ''}${weekReturn.toFixed(2)}%`;
+                    weekReturnElement.className = 'value';
+                    if (weekReturn > 0) {
+                        weekReturnElement.classList.add('positive');
+                    } else if (weekReturn < 0) {
+                        weekReturnElement.classList.add('negative');
+                    } else {
+                        weekReturnElement.classList.add('neutral');
+                    }
+                    document.getElementById('weekReturnSub').textContent = 
+                        `盈亏: ${formatCurrency(data.weekPnl)} (${data.weekTrades}笔)`;
+                }
+            } catch (error) {
+                console.error('加载收益率数据失败:', error);
+                document.getElementById('yearReturn').textContent = '--';
+                document.getElementById('monthReturn').textContent = '--';
+                document.getElementById('weekReturn').textContent = '--';
+            }
         }
 
         // 🔥 趋势判断面板

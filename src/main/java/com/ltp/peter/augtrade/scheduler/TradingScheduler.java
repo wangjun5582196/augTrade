@@ -1234,11 +1234,36 @@ public class TradingScheduler {
     @Scheduled(fixedRate = 30000)
     public void logRiskStatistics() {
         // 根据交易模式选择symbol
-        String activeSymbol = (bybitEnabled && bybitTradingService.isEnabled()) ? bybitSymbol : binanceSymbol;
+        String activeSymbol = (binanceEnabled && binanceFuturesService != null) ? binanceFuturesSymbol : 
+                             (bybitEnabled && bybitTradingService.isEnabled()) ? bybitSymbol : binanceSymbol;
         
         try {
-            String statistics = riskManagementService.getRiskStatistics(activeSymbol);
-            log.info(statistics);
+            // 🔥 如果是模拟交易模式，使用PaperTradingService的数据
+            if (paperTrading) {
+                // 获取未实现盈亏
+                BigDecimal unrealizedPnl = BigDecimal.ZERO;
+                if (paperTradingService.hasOpenPosition()) {
+                    com.ltp.peter.augtrade.entity.PaperPosition position = paperTradingService.getCurrentPosition();
+                    if (position != null) {
+                        unrealizedPnl = position.getUnrealizedPnL();
+                    }
+                }
+                
+                // 获取今日盈亏
+                double todayProfitLoss = paperTradingService.getTotalProfit();
+                int totalTrades = paperTradingService.getTotalTrades();
+                int winTrades = paperTradingService.getWinTrades();
+                int lossTrades = paperTradingService.getLossTrades();
+                
+                log.info("📊 风控统计 - 未实现盈亏: ${}, 今日盈亏: ${} ({}单: {}盈/{}亏)", 
+                        String.format("%.2f", unrealizedPnl), 
+                        String.format("%.2f", todayProfitLoss),
+                        totalTrades, winTrades, lossTrades);
+            } else {
+                // 实盘交易使用RiskManagementService
+                String statistics = riskManagementService.getRiskStatistics(activeSymbol);
+                log.info(statistics);
+            }
         } catch (Exception e) {
             log.error("风控统计任务失败", e);
         }

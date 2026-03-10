@@ -1571,6 +1571,102 @@ public class DashboardController {
     }
     
     /**
+     * 🔥 新增：获取收益率统计（年/月/7日）
+     * 本金：$10,000
+     */
+    @GetMapping("/returns")
+    public Map<String, Object> getReturns() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            BigDecimal principal = new BigDecimal("10000"); // 本金$10,000
+            
+            // 获取所有已成交订单
+            List<TradeOrder> allOrders = tradeOrderMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<TradeOrder>()
+                    .and(wrapper -> wrapper
+                        .eq(TradeOrder::getStatus, "FILLED")
+                        .or()
+                        .likeRight(TradeOrder::getStatus, "CLOSED"))
+                    .isNotNull(TradeOrder::getProfitLoss)
+                    .orderByAsc(TradeOrder::getExecutedTime)
+            );
+            
+            if (allOrders.isEmpty()) {
+                result.put("success", true);
+                result.put("yearReturn", "0.00");
+                result.put("monthReturn", "0.00");
+                result.put("weekReturn", "0.00");
+                result.put("message", "暂无交易数据");
+                return result;
+            }
+            
+            // 计算时间范围
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime yearStart = now.minusYears(1);
+            LocalDateTime monthStart = now.minusMonths(1);
+            LocalDateTime weekStart = now.minusWeeks(1);
+            
+            // 年度盈亏
+            BigDecimal yearPnl = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(yearStart))
+                .map(TradeOrder::getProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            
+            // 月度盈亏
+            BigDecimal monthPnl = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(monthStart))
+                .map(TradeOrder::getProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            
+            // 7日盈亏
+            BigDecimal weekPnl = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(weekStart))
+                .map(TradeOrder::getProfitLoss)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            
+            // 计算收益率
+            BigDecimal yearReturn = yearPnl.divide(principal, 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"));
+            BigDecimal monthReturn = monthPnl.divide(principal, 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"));
+            BigDecimal weekReturn = weekPnl.divide(principal, 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"));
+            
+            // 统计交易次数
+            long yearTrades = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(yearStart))
+                .count();
+            long monthTrades = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(monthStart))
+                .count();
+            long weekTrades = allOrders.stream()
+                .filter(o -> o.getExecutedTime() != null && o.getExecutedTime().isAfter(weekStart))
+                .count();
+            
+            result.put("success", true);
+            result.put("principal", principal.setScale(2, RoundingMode.HALF_UP));
+            result.put("yearReturn", yearReturn.setScale(2, RoundingMode.HALF_UP));
+            result.put("monthReturn", monthReturn.setScale(2, RoundingMode.HALF_UP));
+            result.put("weekReturn", weekReturn.setScale(2, RoundingMode.HALF_UP));
+            result.put("yearPnl", yearPnl.setScale(2, RoundingMode.HALF_UP));
+            result.put("monthPnl", monthPnl.setScale(2, RoundingMode.HALF_UP));
+            result.put("weekPnl", weekPnl.setScale(2, RoundingMode.HALF_UP));
+            result.put("yearTrades", yearTrades);
+            result.put("monthTrades", monthTrades);
+            result.put("weekTrades", weekTrades);
+            result.put("timestamp", System.currentTimeMillis());
+            
+        } catch (Exception e) {
+            log.error("获取收益率统计失败", e);
+            result.put("success", false);
+            result.put("message", "获取收益率失败: " + e.getMessage());
+        }
+        
+        return result;
+    }
+    
+    /**
      * P1-2: 获取开仓时机分析
      * 按小时统计交易表现
      */
