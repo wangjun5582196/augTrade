@@ -32,8 +32,17 @@ public class MarketDataService {
     @Autowired(required = false)
     private BybitTradingService bybitTradingService;
     
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.trading.broker.BinanceFuturesTradingService binanceFuturesService;
+    
     @org.springframework.beans.factory.annotation.Value("${trading.data-collector.source:mock}")
     private String dataSource;
+    
+    @org.springframework.beans.factory.annotation.Value("${binance.api.enabled:false}")
+    private boolean binanceEnabled;
+    
+    @org.springframework.beans.factory.annotation.Value("${binance.futures.symbol:XAUUSDT}")
+    private String binanceFuturesSymbol;
     
     @org.springframework.beans.factory.annotation.Value("${trading.binance.symbol:PAXGUSDT}")
     private String binanceSymbol;
@@ -46,10 +55,24 @@ public class MarketDataService {
     
     /**
      * 获取最新的市场价格
-     * 根据配置自动选择数据源（Bybit/币安/模拟）
+     * 🔥 优先币安 → Fallback Bybit → 模拟
      */
     public BigDecimal getCurrentPrice(String symbol) {
-        // 优先从Bybit获取实时价格
+        // 🔥 优先从币安获取实时价格
+        if (binanceEnabled && binanceFuturesService != null) {
+            try {
+                BigDecimal price = binanceFuturesService.getCurrentPrice(symbol);
+                if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                    lastPrice = price;
+                    log.debug("从币安获取{}实时价格: {}", symbol, price);
+                    return price;
+                }
+            } catch (Exception e) {
+                log.warn("从币安获取{}价格失败: {}", symbol, e.getMessage());
+            }
+        }
+        
+        // Fallback: 从Bybit获取
         if (bybitEnabled && bybitTradingService != null) {
             try {
                 BigDecimal price = bybitTradingService.getCurrentPrice(symbol);
@@ -63,17 +86,17 @@ public class MarketDataService {
             }
         }
         
-        // 从币安获取真实价格
+        // Fallback: 从realMarketDataService获取
         if ("binance".equals(dataSource)) {
             try {
                 BigDecimal price = realMarketDataService.getPriceFromBinance(symbol);
                 if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
                     lastPrice = price;
-                    log.debug("从币安获取{}价格: {}", symbol, price);
+                    log.debug("从RealMarketDataService获取{}价格: {}", symbol, price);
                     return price;
                 }
             } catch (Exception e) {
-                log.warn("从币安获取{}价格失败，使用模拟价格", symbol, e);
+                log.warn("从RealMarketDataService获取{}价格失败: {}", symbol, e.getMessage());
             }
         }
         

@@ -1142,14 +1142,21 @@ public class TradingScheduler {
             // 记录更新前的持仓状态
             boolean hadPosition = paperTradingService.hasOpenPosition();
             
-            // ✨ 修复：增强网络异常处理，确保止损止盈检查必定执行
+            // 🔥 优先使用币安获取价格
             BigDecimal currentPrice = null;
             int retryCount = 0;
             int maxRetries = 3;
             
             while (currentPrice == null && retryCount < maxRetries) {
                 try {
-                    currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
+                    // 优先币安
+                    if (binanceEnabled && binanceFuturesService != null) {
+                        currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+                    }
+                    // Fallback到Bybit
+                    else if (bybitEnabled && bybitTradingService != null) {
+                        currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
+                    }
                 } catch (Exception e) {
                     retryCount++;
                     if (retryCount >= maxRetries) {
@@ -1328,10 +1335,14 @@ public class TradingScheduler {
             if (hasPosition) {
                 com.ltp.peter.augtrade.entity.PaperPosition position = paperTradingService.getCurrentPosition();
                 if (position != null) {
-                    // 获取当前价格
+                    // 🔥 优先使用币安获取当前价格
                     BigDecimal currentPrice = null;
                     try {
-                        currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
+                        if (binanceEnabled && binanceFuturesService != null) {
+                            currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+                        } else if (bybitEnabled && bybitTradingService != null) {
+                            currentPrice = bybitTradingService.getCurrentPrice(bybitSymbol);
+                        }
                     } catch (Exception e) {
                         currentPrice = position.getCurrentPrice();
                     }
