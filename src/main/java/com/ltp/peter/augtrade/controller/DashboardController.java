@@ -40,6 +40,9 @@ public class DashboardController {
     @Autowired(required = false)
     private BybitTradingService bybitTradingService;
     
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.trading.broker.BinanceFuturesTradingService binanceFuturesService;
+    
     @Autowired
     private com.ltp.peter.augtrade.mapper.KlineMapper klineMapper;
     
@@ -99,15 +102,28 @@ public class DashboardController {
                 try {
                     BigDecimal currentPrice = null;
                     
-                    // 获取实时价格
-                    if (bybitTradingService != null) {
+                    // 🔥 优先使用币安获取实时价格
+                    if (binanceFuturesService != null) {
                         try {
-                            currentPrice = bybitTradingService.getCurrentPrice(pos.getSymbol());
+                            currentPrice = binanceFuturesService.getCurrentPrice(pos.getSymbol());
+                            log.debug("从币安获取{}实时价格: {}", pos.getSymbol(), currentPrice);
                         } catch (Exception e) {
-                            log.debug("从Bybit获取价格失败: {}", e.getMessage());
+                            log.debug("从币安获取价格失败: {}", e.getMessage());
                         }
                     }
                     
+                    // Fallback到Bybit
+                    if (currentPrice == null || currentPrice.compareTo(BigDecimal.ZERO) <= 0) {
+                        if (bybitTradingService != null) {
+                            try {
+                                currentPrice = bybitTradingService.getCurrentPrice(pos.getSymbol());
+                            } catch (Exception e) {
+                                log.debug("从Bybit获取价格失败: {}", e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // 最后尝试MarketDataService
                     if (currentPrice == null || currentPrice.compareTo(BigDecimal.ZERO) <= 0) {
                         currentPrice = marketDataService.getCurrentPrice(pos.getSymbol());
                     }
@@ -210,17 +226,29 @@ public class DashboardController {
                 try {
                     BigDecimal currentPrice = null;
                     
-                    // 优先从Bybit获取实时价格
-                    if (bybitTradingService != null) {
+                    // 🔥 优先从币安获取实时价格
+                    if (binanceFuturesService != null) {
                         try {
-                            currentPrice = bybitTradingService.getCurrentPrice(position.getSymbol());
-                            log.debug("从Bybit获取{}实时价格: {}", position.getSymbol(), currentPrice);
+                            currentPrice = binanceFuturesService.getCurrentPrice(position.getSymbol());
+                            log.debug("从币安获取{}实时价格: {}", position.getSymbol(), currentPrice);
                         } catch (Exception e) {
-                            log.warn("从Bybit获取价格失败，尝试其他方式: {}", e.getMessage());
+                            log.debug("从币安获取价格失败，尝试Bybit: {}", e.getMessage());
                         }
                     }
                     
-                    // 如果Bybit获取失败，使用MarketDataService
+                    // Fallback到Bybit
+                    if (currentPrice == null || currentPrice.compareTo(BigDecimal.ZERO) <= 0) {
+                        if (bybitTradingService != null) {
+                            try {
+                                currentPrice = bybitTradingService.getCurrentPrice(position.getSymbol());
+                                log.debug("从Bybit获取{}实时价格: {}", position.getSymbol(), currentPrice);
+                            } catch (Exception e) {
+                                log.warn("从Bybit获取价格失败，尝试其他方式: {}", e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // 最后尝试MarketDataService
                     if (currentPrice == null || currentPrice.compareTo(BigDecimal.ZERO) <= 0) {
                         currentPrice = marketDataService.getCurrentPrice(position.getSymbol());
                     }
@@ -498,32 +526,52 @@ public class DashboardController {
     }
     
     /**
-     * 获取黄金实时价格（从Bybit）
+     * 获取黄金实时价格（优先币安，fallback到Bybit）
      */
     @GetMapping("/gold-price")
     public Map<String, Object> getGoldPrice() {
         Map<String, Object> result = new HashMap<>();
         
         try {
-            String symbol = "XAUTUSDT"; // 黄金永续合约
+            String symbol = "XAUUSDT"; // 黄金永续合约
+            BigDecimal price = null;
+            String source = null;
             
-            if (bybitTradingService != null) {
-                BigDecimal price = bybitTradingService.getCurrentPrice(symbol);
-                
-                if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
-                    result.put("success", true);
-                    result.put("symbol", symbol);
-                    result.put("price", price.setScale(2, RoundingMode.HALF_UP));
-                    result.put("timestamp", System.currentTimeMillis());
-                    
-                    log.debug("获取{}价格成功: {}", symbol, price);
-                } else {
-                    result.put("success", false);
-                    result.put("message", "获取价格失败");
+            // 🔥 优先使用币安
+            if (binanceFuturesService != null) {
+                try {
+                    price = binanceFuturesService.getCurrentPrice(symbol);
+                    if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                        source = "Binance";
+                        log.debug("从币安获取{}价格成功: {}", symbol, price);
+                    }
+                } catch (Exception e) {
+                    log.debug("从币安获取价格失败，尝试Bybit: {}", e.getMessage());
                 }
+            }
+            
+            // Fallback到Bybit
+            if (price == null && bybitTradingService != null) {
+                try {
+                    price = bybitTradingService.getCurrentPrice("XAUTUSDT");
+                    if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                        source = "Bybit";
+                        log.debug("从Bybit获取{}价格成功: {}", symbol, price);
+                    }
+                } catch (Exception e) {
+                    log.warn("从Bybit获取价格也失败: {}", e.getMessage());
+                }
+            }
+            
+            if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                result.put("success", true);
+                result.put("symbol", symbol);
+                result.put("price", price.setScale(2, RoundingMode.HALF_UP));
+                result.put("source", source);
+                result.put("timestamp", System.currentTimeMillis());
             } else {
                 result.put("success", false);
-                result.put("message", "Bybit服务未启用");
+                result.put("message", "所有数据源获取价格失败");
             }
             
         } catch (Exception e) {
@@ -536,32 +584,52 @@ public class DashboardController {
     }
 
     /**
-     * 获取黄金实时价格2（从Bybit）
+     * 获取黄金实时价格2（优先币安，fallback到Bybit）
      */
     @GetMapping("/gold-price2")
     public Map<String, Object> getGoldPrice2() {
         Map<String, Object> result = new HashMap<>();
 
         try {
-            String symbol = "XAUUSD+"; // 黄金永续合约
-
-            if (bybitTradingService != null) {
-                BigDecimal price = bybitTradingService.getCurrentPrice(symbol);
-
-                if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
-                    result.put("success", true);
-                    result.put("symbol", symbol);
-                    result.put("price", price.setScale(2, RoundingMode.HALF_UP));
-                    result.put("timestamp", System.currentTimeMillis());
-
-                    log.debug("获取{}价格成功: {}", symbol, price);
-                } else {
-                    result.put("success", false);
-                    result.put("message", "获取价格失败");
+            String symbol = "XAUUSDT"; // 黄金永续合约
+            BigDecimal price = null;
+            String source = null;
+            
+            // 🔥 优先使用币安
+            if (binanceFuturesService != null) {
+                try {
+                    price = binanceFuturesService.getCurrentPrice(symbol);
+                    if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                        source = "Binance";
+                        log.debug("从币安获取{}价格成功: {}", symbol, price);
+                    }
+                } catch (Exception e) {
+                    log.debug("从币安获取价格失败，尝试Bybit: {}", e.getMessage());
                 }
+            }
+            
+            // Fallback到Bybit
+            if (price == null && bybitTradingService != null) {
+                try {
+                    price = bybitTradingService.getCurrentPrice("XAUUSD+");
+                    if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                        source = "Bybit";
+                        log.debug("从Bybit获取{}价格成功: {}", symbol, price);
+                    }
+                } catch (Exception e) {
+                    log.warn("从Bybit获取价格也失败: {}", e.getMessage());
+                }
+            }
+
+            if (price != null && price.compareTo(BigDecimal.ZERO) > 0) {
+                result.put("success", true);
+                result.put("symbol", symbol);
+                result.put("price", price.setScale(2, RoundingMode.HALF_UP));
+                result.put("source", source);
+                result.put("timestamp", System.currentTimeMillis());
             } else {
                 result.put("success", false);
-                result.put("message", "Bybit服务未启用");
+                result.put("message", "所有数据源获取价格失败");
             }
 
         } catch (Exception e) {
@@ -585,7 +653,7 @@ public class DashboardController {
         Map<String, Object> result = new HashMap<>();
         
         try {
-            String symbol = "XAUTUSDT";
+            String symbol = "XAUUSDT";
             
             if (strategyOrchestrator == null) {
                 result.put("success", false);
@@ -868,7 +936,7 @@ public class DashboardController {
                 return result;
             }
             
-            String symbol = "XAUTUSDT";
+            String symbol = "XAUUSDT";
             
             // 获取市场上下文
             com.ltp.peter.augtrade.strategy.core.MarketContext context = 
@@ -1184,7 +1252,7 @@ public class DashboardController {
         Map<String, Object> result = new HashMap<>();
         
         try {
-            String symbol = "XAUTUSDT";
+            String symbol = "XAUUSDT";
             
             // 获取当前ATR
             Double currentATR = null;

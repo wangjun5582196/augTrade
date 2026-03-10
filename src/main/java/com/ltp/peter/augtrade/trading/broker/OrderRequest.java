@@ -63,4 +63,12 @@ public class OrderRequest {
      * 备注
      */
     private String remark;
+    
+    /**
+     * 持仓方向（合约交易使用）
+     * LONG - 多头持仓
+     * SHORT - 空头持仓
+     * BOTH - 单向持仓模式（默认）
+     */
+    private String positionSide;
 }

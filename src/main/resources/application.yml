@@ -68,7 +68,7 @@ logging:
 # Bybit API配置（正式网 - 模拟交易模式）⭐⭐⭐⭐⭐
 bybit:
   api:
-    enabled: true                           # ✅ 已启用Bybit
+    enabled: false                          # ❌ 已禁用Bybit（切换到币安）
     key: 你的正式网API-Key                   # 仅用于获取价格（可不填）
     secret: 你的正式网API-Secret             # 仅用于获取价格（可不填）
     testnet: false                          # ✅ 正式网（获取真实价格）
@@ -79,24 +79,39 @@ bybit:
     max-qty: 100
     leverage: 2                             # ⭐ 2倍杠杆（正式网建议保守）
 
-# 币安 API配置（获取黄金报价）🌟🌟🌟🌟🌟
+# 币安 API配置（现货+合约）🌟🌟🌟🌟🌟
 binance:
   api:
     enabled: true                           # ✅ 已启用币安
-    key: ""                                 # 可选：获取价格无需API Key
-    secret: ""                              # 可选：获取价格无需API Secret
+    key: ""                                 # ⚠️ 实盘交易必填：请填写您的币安API Key
+    secret: ""                              # ⚠️ 实盘交易必填：请填写您的币安API Secret
     testnet: false                          # ✅ 正式网（获取真实价格）
+  
+  # 现货交易配置
   gold:
-    # 币安支持的黄金代币交易对：
-    # PAXGUSDT - Paxos Gold (PAX Gold) - 推荐
-    # XAUUSDT - Tether Gold (但币安可能不支持，需要验证)
-    symbol: PAXGUSDT                        # ✅ Paxos黄金代币（1 PAXG = 1盎司黄金）
+    symbol: PAXGUSDT                        # ✅ Paxos黄金代币（现货）
+  live:
+    mode: false                             # ⚠️ 现货实盘开关
+    max-order-amount: 0.01                  # 🔒 单笔最大数量（PAXG）
+    max-daily-trades: 20                    # 🔒 每日最大交易次数
+    max-daily-loss: 500.0                   # 🔒 每日最大亏损限制（USD）
+  
+  # 🔥 合约交易配置（XAUUSDT永续合约）
+  futures:
+    symbol: XAUUSDT                         # ✅ 黄金永续合约
+    live-mode: false                        # ⚠️ 合约实盘开关（false=只读，true=实盘）
+    max-order-amount: 10                    # 🔒 单笔最大数量（整数，如10=10盎司）
+    max-daily-trades: 20                    # 🔒 每日最大交易次数
+    max-daily-loss: 500.0                   # 🔒 每日最大亏损（USD）
+    leverage: 2                             # 🔒 杠杆倍数（1-125，建议2-5）
+  
+  # 🔥 币安风控配置（统一配置）
   risk:
     # 止损止盈模式：fixed（固定）/ atr（动态ATR）
     mode: atr                               # 🔥 P0修复：改为ATR动态模式，根据市场波动自动调整
     
     # 固定模式参数（mode=fixed时使用）
-    stop-loss-dollars: 8                   # 🔥 P0修复：从15提高到18，避免被小幅波动扫损
+    stop-loss-dollars: 8                    # 🔥 P0修复：从15提高到18，避免被小幅波动扫损
     take-profit-dollars: 15                 # ✅ 固定止盈$45/盎司（总$450，盈亏比1:2.5）
     
     # ATR动态模式参数（mode=atr时使用）

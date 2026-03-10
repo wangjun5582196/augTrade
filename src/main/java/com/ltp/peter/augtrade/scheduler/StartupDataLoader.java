@@ -32,6 +32,9 @@ public class StartupDataLoader implements ApplicationRunner {
     @Autowired
     private BybitTradingService bybitTradingService;
     
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.trading.broker.BinanceFuturesTradingService binanceFuturesService;
+    
     @Autowired
     private MarketDataService marketDataService;
     
@@ -40,6 +43,12 @@ public class StartupDataLoader implements ApplicationRunner {
     
     @Value("${bybit.gold.symbol:XAUTUSDT}")
     private String bybitSymbol;
+    
+    @Value("${binance.api.enabled:false}")
+    private boolean binanceEnabled;
+    
+    @Value("${binance.futures.symbol:XAUUSDT}")
+    private String binanceFuturesSymbol;
     
     @Value("${trading.startup.load-klines:true}")
     private boolean loadKlinesOnStartup;
@@ -60,15 +69,32 @@ public class StartupDataLoader implements ApplicationRunner {
             return;
         }
         
+        // 🔥 优先使用币安（如果启用）
+        if (binanceEnabled && binanceFuturesService != null) {
+            log.info("========================================");
+            log.info("🚀 开始加载币安启动数据...");
+            log.info("========================================");
+            try {
+                loadBinanceData();
+                dataLoaded = true;
+            } catch (Exception e) {
+                log.error("❌ 币安数据加载失败", e);
+                dataLoaded = false;
+            } finally {
+                dataLoadedLatch.countDown();
+            }
+            return;
+        }
+        
         if (!bybitEnabled || !bybitTradingService.isEnabled()) {
-            log.warn("⚠️ Bybit未启用，跳过启动时数据加载");
+            log.warn("⚠️ 币安和Bybit均未启用，跳过启动时数据加载");
             dataLoaded = true;
             dataLoadedLatch.countDown();
             return;
         }
         
         log.info("========================================");
-        log.info("🚀 开始加载启动数据...");
+        log.info("🚀 开始加载Bybit启动数据...");
         log.info("========================================");
         
         try {
@@ -86,7 +112,36 @@ public class StartupDataLoader implements ApplicationRunner {
     }
     
     /**
-     * 加载历史K线数据（只加载当天的数据）
+     * 🔥 新增：加载币安数据
+     */
+    private void loadBinanceData() throws Exception {
+        try {
+            BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+            log.info("💰 币安当前{}价格: ${}", binanceFuturesSymbol, currentPrice);
+            
+            // 简化处理：创建初始K线
+            Kline kline = new Kline();
+            kline.setSymbol(binanceFuturesSymbol);
+            kline.setInterval("5m");
+            kline.setTimestamp(LocalDateTime.now());
+            kline.setOpenPrice(currentPrice);
+            kline.setHighPrice(currentPrice);
+            kline.setLowPrice(currentPrice);
+            kline.setClosePrice(currentPrice);
+            kline.setVolume(BigDecimal.ZERO);
+            kline.setCreateTime(LocalDateTime.now());
+            kline.setUpdateTime(LocalDateTime.now());
+            
+            marketDataService.saveKline(kline);
+            log.info("✅ 币安数据加载完成！系统已准备好开始交易");
+        } catch (Exception e) {
+            log.error("❌ 币安数据加载失败", e);
+            throw e;
+        }
+    }
+    
+    /**
+     * 加载历史K线数据（只加载当天的数据）- Bybit
      */
     private void loadHistoricalKlines() throws Exception {
         // 计算当天的K线数量（从0点到现在）

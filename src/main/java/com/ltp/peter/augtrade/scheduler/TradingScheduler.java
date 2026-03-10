@@ -55,6 +55,9 @@ public class TradingScheduler {
     @Autowired
     private BybitTradingService bybitTradingService;
     
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.trading.broker.BinanceFuturesTradingService binanceFuturesService;
+    
     @Autowired
     private StrategyOrchestrator strategyOrchestrator;
     
@@ -133,6 +136,37 @@ public class TradingScheduler {
     @Value("${bybit.risk.atr-max-threshold:15.0}")
     private double atrMaxThreshold;
     
+    // 🔥 币安配置
+    @Value("${binance.api.enabled:false}")
+    private boolean binanceEnabled;
+    
+    @Value("${binance.futures.symbol:XAUUSDT}")
+    private String binanceFuturesSymbol;
+    
+    @Value("${binance.futures.max-order-amount:10}")
+    private int binanceFuturesMaxQty;
+    
+    @Value("${binance.risk.mode:fixed}")
+    private String binanceRiskMode;
+    
+    @Value("${binance.risk.stop-loss-dollars:8}")
+    private int binanceStopLossDollars;
+    
+    @Value("${binance.risk.take-profit-dollars:15}")
+    private int binanceTakeProfitDollars;
+    
+    @Value("${binance.risk.atr-stop-loss-multiplier:3.0}")
+    private double binanceAtrStopLossMultiplier;
+    
+    @Value("${binance.risk.atr-take-profit-multiplier:4.0}")
+    private double binanceAtrTakeProfitMultiplier;
+    
+    @Value("${binance.risk.atr-min-threshold:1.0}")
+    private double binanceAtrMinThreshold;
+    
+    @Value("${binance.risk.atr-max-threshold:15.0}")
+    private double binanceAtrMaxThreshold;
+    
     // 🔥 P1修复-20260209: 冷却期从5分钟延长到10分钟
     // 数据分析：今日16笔交易平均22分钟一笔，#374→#375→#376连续追高间隔仅7分钟
     private LocalDateTime lastCloseTime = null;
@@ -155,9 +189,9 @@ public class TradingScheduler {
     private static final int MIN_HOLDING_SECONDS_BIG_PROFIT = 1200; // 大盈利时20分钟（从15分钟增加）
     
     /**
-     * Bybit数据采集任务 - 每300秒（5分钟）执行一次
+     * 数据采集任务 - 每300秒（5分钟）执行一次
      * 注意：采集频率应与K线周期匹配，避免重复数据
-     * 仅在Bybit启用时采集黄金K线数据
+     * 支持币安/Bybit黄金K线数据采集
      */
     @Scheduled(fixedRate = 300000)
     public void collectMarketData() {
@@ -169,11 +203,45 @@ public class TradingScheduler {
             }
         }
         
+        // 🔥 优先使用币安（如果启用）
+        if (binanceEnabled && binanceFuturesService != null) {
+            collectBinanceData();
+        }
         // 如果启用Bybit，采集Bybit黄金数据
-        if (bybitEnabled && bybitTradingService.isEnabled()) {
+        else if (bybitEnabled && bybitTradingService.isEnabled()) {
             collectBybitData();
         }
         // 否则不采集数据（避免无用的BTC数据）
+    }
+    
+    /**
+     * 🔥 新增：采集币安黄金K线数据
+     */
+    private void collectBinanceData() {
+        try {
+            log.debug("从币安获取黄金K线数据: {}", binanceFuturesSymbol);
+            
+            // 从币安获取最新价格（简化处理，实际应获取K线）
+            BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+            
+            // 保存K线数据
+            Kline kline = new Kline();
+            kline.setSymbol(binanceFuturesSymbol);
+            kline.setInterval("5m");
+            kline.setTimestamp(LocalDateTime.now());
+            kline.setOpenPrice(currentPrice);
+            kline.setHighPrice(currentPrice);
+            kline.setLowPrice(currentPrice);
+            kline.setClosePrice(currentPrice);
+            kline.setVolume(BigDecimal.ZERO);
+            kline.setCreateTime(LocalDateTime.now());
+            kline.setUpdateTime(LocalDateTime.now());
+            
+            marketDataService.saveKline(kline);
+            log.info("✅ 币安黄金K线保存成功: 价格={}", kline.getClosePrice());
+        } catch (Exception e) {
+            log.error("币安数据采集失败", e);
+        }
     }
     
     /**
@@ -212,7 +280,7 @@ public class TradingScheduler {
     
     /**
      * 策略执行任务 - 🔥 P0修复：每60秒执行一次（从10秒延长，减少噪音交易）
-     * 使用Bybit交易黄金（XAUUSDT）
+     * 支持币安/Bybit交易黄金（XAUUSDT）
      */
     @Scheduled(fixedRate = 60000)
     public void executeStrategy() {
@@ -229,12 +297,360 @@ public class TradingScheduler {
             log.info("✅ 启动数据已加载完成，开始执行交易策略");
         }
         
+        // 🔥 优先使用币安（如果启用）
+        if (binanceEnabled && binanceFuturesService != null) {
+            executeBinanceStrategy();
+        }
         // 如果启用Bybit，使用Bybit交易
-        if (bybitEnabled && bybitTradingService.isEnabled()) {
+        else if (bybitEnabled && bybitTradingService.isEnabled()) {
             executeBybitStrategy();
         } else {
-            log.warn("⚠️ Bybit未启用，无法执行策略");
+            log.warn("⚠️ 币安和Bybit均未启用，无法执行策略");
         }
+    }
+    
+    /**
+     * 🔥 新增：币安黄金交易策略
+     */
+    private void executeBinanceStrategy() {
+        try {
+            log.info("========================================");
+            log.info("【币安黄金交易策略】开始执行 - 交易品种: {}", binanceFuturesSymbol);
+            
+            // 1. 获取当前价格
+            BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
+            log.info("当前黄金价格: ${}", currentPrice);
+            
+            // 2. 🔥 使用策略工厂（根据配置自动选择策略）
+            TradingStrategyFactory.Signal strategySignal = strategyFactory.generateSignal(binanceFuturesSymbol);
+            
+            log.info("📊 策略工厂输出: {} - {}", strategySignal, strategyFactory.getStrategyDescription());
+            
+            // 转换为TradingSignal格式
+            com.ltp.peter.augtrade.strategy.signal.TradingSignal tradingSignal = 
+                    convertFactorySignalToTradingSignal(strategySignal, binanceFuturesSymbol);
+            
+            // 3. 检查每日交易次数限制
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime todayStart = now.withHour(0).withMinute(0).withSecond(0);
+            
+            if (dailyTradeResetTime.isBefore(todayStart)) {
+                log.info("📅 新的一天开始,重置每日交易计数器");
+                dailyTradeCount = 0;
+                dailyTradeResetTime = todayStart;
+            }
+            
+            if (dailyTradeCount >= MAX_DAILY_TRADES) {
+                log.warn("⛔ 今日交易次数已达上限({}/{}),暂停交易直到明天", 
+                        dailyTradeCount, MAX_DAILY_TRADES);
+                log.info("========================================");
+                return;
+            }
+            
+            // 4. 检查冷却期
+            if (lastCloseTime != null) {
+                long secondsSinceClose = Duration.between(lastCloseTime, LocalDateTime.now()).getSeconds();
+                if (secondsSinceClose < CLOSE_COOLDOWN_SECONDS) {
+                    log.info("⏸️ 平仓冷却期中（剩余{}秒），防止频繁开仓", CLOSE_COOLDOWN_SECONDS - secondsSinceClose);
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
+            // 5. 检查信号反转并平仓
+            if (paperTrading && paperTradingService.hasOpenPosition()) {
+                handleSignalReversal(currentPrice, tradingSignal, binanceFuturesSymbol);
+                if (!paperTradingService.hasOpenPosition()) {
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
+            // 6. 检查最小开仓间隔
+            if (lastOpenTime != null) {
+                long secondsSinceLastOpen = Duration.between(lastOpenTime, LocalDateTime.now()).getSeconds();
+                if (secondsSinceLastOpen < MIN_OPEN_INTERVAL_SECONDS) {
+                    log.info("⏸️ 距离上次开仓仅{}秒（需要≥{}秒），防止连续追高开仓", 
+                            secondsSinceLastOpen, MIN_OPEN_INTERVAL_SECONDS);
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
+            // 7. 趋势反转检测
+            if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+                if (detectTrendReversal(binanceFuturesSymbol)) {
+                    log.warn("🚨 检测到趋势反转（EMA死叉），禁止做多！等待趋势明确");
+                    log.info("========================================");
+                    return;
+                }
+            }
+            
+            // 8. 市场状态识别
+            MarketRegime regime = detectMarketRegime(binanceFuturesSymbol);
+            int requiredStrength = calculateRequiredStrength(regime, tradingSignal);
+            
+            // 9. 根据信号执行交易
+            if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+                if (tradingSignal.getStrength() < requiredStrength) {
+                    log.info("⏸️ 做多信号强度{}不足（市场状态：{}，需要≥{}），暂不开仓", 
+                            tradingSignal.getStrength(), regime, requiredStrength);
+                } else {
+                    log.info("🔥 收到高质量做多信号（强度{}，市场：{}）！准备做多黄金", 
+                            tradingSignal.getStrength(), regime);
+                    boolean success = executeBinanceBuy(currentPrice);
+                    if (success) {
+                        dailyTradeCount++;
+                        lastOpenTime = LocalDateTime.now();
+                        log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    }
+                }
+            } else if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
+                int shortRequiredStrength = requiredStrength + 15;
+                
+                if (tradingSignal.getStrength() < shortRequiredStrength) {
+                    log.info("🚫 做空信号强度{}不足（市场：{}，做空需要≥{}），暂不开空仓", 
+                            tradingSignal.getStrength(), regime, shortRequiredStrength);
+                } else {
+                    log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
+                            tradingSignal.getStrength(), shortRequiredStrength, regime);
+                    boolean success = executeBinanceSell(currentPrice);
+                    if (success) {
+                        dailyTradeCount++;
+                        lastOpenTime = LocalDateTime.now();
+                        log.info("📊 今日交易次数: {}/{}", dailyTradeCount, MAX_DAILY_TRADES);
+                    }
+                }
+            } else {
+                log.debug("⏸️ 保持观望，等待高质量信号（市场状态：{}）", regime);
+            }
+            
+            log.info("策略执行完成");
+            log.info("========================================");
+            
+        } catch (Exception e) {
+            log.error("币安策略执行失败", e);
+        }
+    }
+    
+    /**
+     * 🔥 新增：通过币安做多黄金
+     */
+    private boolean executeBinanceBuy(BigDecimal currentPrice) {
+        try {
+            // 计算止损止盈
+            BigDecimal stopLoss;
+            BigDecimal takeProfit;
+            
+            if ("atr".equalsIgnoreCase(binanceRiskMode)) {
+                java.util.List<Kline> klines = marketDataService.getLatestKlines(binanceFuturesSymbol, "5m", 50);
+                if (klines != null && klines.size() >= 15) {
+                    if (!atrCalculator.isVolatilitySuitableForTrading(klines, binanceAtrMinThreshold, binanceAtrMaxThreshold)) {
+                        log.warn("⚠️ 市场波动不适合交易，放弃开仓");
+                        return false;
+                    }
+                    
+                    stopLoss = atrCalculator.calculateDynamicStopLoss(klines, currentPrice, "LONG", binanceAtrStopLossMultiplier);
+                    takeProfit = atrCalculator.calculateDynamicTakeProfit(klines, currentPrice, "LONG", binanceAtrTakeProfitMultiplier);
+                    
+                    if (stopLoss == null || takeProfit == null) {
+                        stopLoss = currentPrice.subtract(new BigDecimal(binanceStopLossDollars));
+                        takeProfit = currentPrice.add(new BigDecimal(binanceTakeProfitDollars));
+                    }
+                } else {
+                    stopLoss = currentPrice.subtract(new BigDecimal(binanceStopLossDollars));
+                    takeProfit = currentPrice.add(new BigDecimal(binanceTakeProfitDollars));
+                }
+            } else {
+                stopLoss = currentPrice.subtract(new BigDecimal(binanceStopLossDollars));
+                takeProfit = currentPrice.add(new BigDecimal(binanceTakeProfitDollars));
+            }
+            
+            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
+            
+            if (paperTrading) {
+                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
+                        strategyOrchestrator.getMarketContext(binanceFuturesSymbol, 100);
+                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
+                        strategyOrchestrator.generateSignal(binanceFuturesSymbol);
+                
+                PaperPosition position = paperTradingService.openPosition(
+                        binanceFuturesSymbol,
+                        "LONG",
+                        currentPrice,
+                        new BigDecimal(binanceFuturesMaxQty),
+                        stopLoss,
+                        takeProfit,
+                        "BinanceFutures",
+                        signal,
+                        context
+                );
+                
+                if (position != null) {
+                    log.info("✅ 币安模拟做多成功 - 持仓ID: {}", position.getPositionId());
+                    return true;
+                }
+                return false;
+            } else {
+                log.warn("⚠️ 币安实盘交易需要额外配置，当前仅支持模拟交易");
+                return false;
+            }
+                    
+        } catch (Exception e) {
+            log.error("❌ 币安做多失败", e);
+            return false;
+        }
+    }
+    
+    /**
+     * 🔥 新增：通过币安做空黄金
+     */
+    private boolean executeBinanceSell(BigDecimal currentPrice) {
+        try {
+            // 计算止损止盈
+            BigDecimal stopLoss;
+            BigDecimal takeProfit;
+            
+            if ("atr".equalsIgnoreCase(binanceRiskMode)) {
+                java.util.List<Kline> klines = marketDataService.getLatestKlines(binanceFuturesSymbol, "5m", 50);
+                if (klines != null && klines.size() >= 15) {
+                    if (!atrCalculator.isVolatilitySuitableForTrading(klines, binanceAtrMinThreshold, binanceAtrMaxThreshold)) {
+                        log.warn("⚠️ 市场波动不适合交易，放弃开仓");
+                        return false;
+                    }
+                    
+                    stopLoss = atrCalculator.calculateDynamicStopLoss(klines, currentPrice, "SHORT", binanceAtrStopLossMultiplier);
+                    takeProfit = atrCalculator.calculateDynamicTakeProfit(klines, currentPrice, "SHORT", binanceAtrTakeProfitMultiplier);
+                    
+                    if (stopLoss == null || takeProfit == null) {
+                        stopLoss = currentPrice.add(new BigDecimal(binanceStopLossDollars));
+                        takeProfit = currentPrice.subtract(new BigDecimal(binanceTakeProfitDollars));
+                    }
+                } else {
+                    stopLoss = currentPrice.add(new BigDecimal(binanceStopLossDollars));
+                    takeProfit = currentPrice.subtract(new BigDecimal(binanceTakeProfitDollars));
+                }
+            } else {
+                stopLoss = currentPrice.add(new BigDecimal(binanceStopLossDollars));
+                takeProfit = currentPrice.subtract(new BigDecimal(binanceTakeProfitDollars));
+            }
+            
+            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
+            
+            if (paperTrading) {
+                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
+                        strategyOrchestrator.getMarketContext(binanceFuturesSymbol, 100);
+                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
+                        strategyOrchestrator.generateSignal(binanceFuturesSymbol);
+                
+                PaperPosition position = paperTradingService.openPosition(
+                        binanceFuturesSymbol,
+                        "SHORT",
+                        currentPrice,
+                        new BigDecimal(binanceFuturesMaxQty),
+                        stopLoss,
+                        takeProfit,
+                        "BinanceFutures",
+                        signal,
+                        context
+                );
+                
+                if (position != null) {
+                    log.info("✅ 币安模拟做空成功 - 持仓ID: {}", position.getPositionId());
+                    return true;
+                }
+                return false;
+            } else {
+                log.warn("⚠️ 币安实盘交易需要额外配置，当前仅支持模拟交易");
+                return false;
+            }
+                    
+        } catch (Exception e) {
+            log.error("❌ 币安做空失败", e);
+            return false;
+        }
+    }
+    
+    /**
+     * 🔥 新增：统一处理信号反转逻辑
+     */
+    private void handleSignalReversal(BigDecimal currentPrice, 
+                                     com.ltp.peter.augtrade.strategy.signal.TradingSignal tradingSignal,
+                                     String symbol) {
+        com.ltp.peter.augtrade.entity.PaperPosition currentPosition = paperTradingService.getCurrentPosition();
+        
+        // 计算持仓时间
+        long holdingSeconds = Duration.between(currentPosition.getOpenTime(), LocalDateTime.now()).getSeconds();
+        BigDecimal unrealizedPnL = currentPosition.getUnrealizedPnL();
+        
+        // 最大持仓时间检查
+        if (holdingSeconds > MAX_HOLDING_SECONDS) {
+            if (unrealizedPnL.compareTo(BigDecimal.ZERO) > 0 || 
+                unrealizedPnL.compareTo(new BigDecimal(stopLossDollars).multiply(new BigDecimal("-0.5"))) < 0) {
+                log.warn("⏰ 超过最大持仓时间{}分钟，强制平仓", MAX_HOLDING_SECONDS / 60);
+                paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
+                lastCloseTime = LocalDateTime.now();
+                return;
+            }
+        }
+        
+        // 动态持仓保护期
+        int minHoldingTime = calculateMinHoldingTime(unrealizedPnL, tradingSignal);
+        
+        if (holdingSeconds < minHoldingTime) {
+            log.info("⏰ 持仓保护中：持仓{}秒 < 需要{}秒，忽略信号反转", holdingSeconds, minHoldingTime);
+            return;
+        }
+        
+        // 检查信号反转条件（严格）
+        boolean shouldReverse = false;
+        if (currentPosition.getSide().equals("LONG") && 
+            tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
+            shouldReverse = checkReverseConditions(unrealizedPnL, tradingSignal, currentPosition);
+        } else if (currentPosition.getSide().equals("SHORT") && 
+                   tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+            shouldReverse = checkReverseConditions(unrealizedPnL, tradingSignal, currentPosition);
+        }
+        
+        if (shouldReverse) {
+            log.warn("🚨 满足反转条件！信号强度{}，盈亏${}，平仓", 
+                     tradingSignal.getStrength(), unrealizedPnL);
+            paperTradingService.closePositionBySignalReversal(currentPosition, currentPrice);
+            lastCloseTime = LocalDateTime.now();
+        }
+    }
+    
+    /**
+     * 🔥 新增：检查是否满足反转条件
+     */
+    private boolean checkReverseConditions(BigDecimal unrealizedPnL, 
+                                          com.ltp.peter.augtrade.strategy.signal.TradingSignal signal,
+                                          PaperPosition position) {
+        // 规则1：盈利>$50时，禁止信号反转
+        if (unrealizedPnL.compareTo(new BigDecimal("50")) > 0) {
+            return false;
+        }
+        
+        // 规则2：小幅盈亏(±$20)时，禁止信号反转
+        if (unrealizedPnL.abs().compareTo(new BigDecimal("20")) < 0) {
+            return false;
+        }
+        
+        // 规则3：移动止损启动后，禁止信号反转
+        if (position.getTrailingStopEnabled() != null && position.getTrailingStopEnabled()) {
+            return false;
+        }
+        
+        // 规则4：只在超强信号(≥90)且亏损>$30时才反转
+        if (signal.getStrength() < 90) {
+            return false;
+        }
+        
+        if (unrealizedPnL.compareTo(new BigDecimal("-30")) > 0) {
+            return false;
+        }
+        
+        return true;
     }
     
     /**
