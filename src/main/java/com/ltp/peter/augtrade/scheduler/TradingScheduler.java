@@ -296,7 +296,16 @@ public class TradingScheduler {
             }
             log.info("✅ 启动数据已加载完成，开始执行交易策略");
         }
-        
+
+        // 交易时段过滤：跳过低流动性时段
+        // 黄金活跃时段：伦敦盘(UTC 07:00-16:00) + 纽约盘(UTC 13:00-21:00)
+        // 跳过亚洲夜盘(UTC 22:00-06:00)：点差大、假突破多、流动性差
+        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
+        if (utcHour >= 22 || utcHour < 6) {
+            log.debug("⏰ UTC {}:xx 处于低流动性时段(22:00-06:00)，跳过本轮策略", utcHour);
+            return;
+        }
+
         // 🔥 优先使用币安（如果启用）
         if (binanceEnabled && binanceFuturesService != null) {
             executeBinanceStrategy();
@@ -1751,7 +1760,7 @@ public class TradingScheduler {
             // 修复：EMA20>EMA50时不应阻止做多，只记录警告
             double emaGap = (trend.getEmaShort() - trend.getEmaLong()) / trend.getEmaLong() * 100;
             if (emaGap > 0 && emaGap < 0.1) {
-                log.warn("⚠️ EMA间距较窄（{:.4f}%），趋势可能减弱，但仍为金叉，不阻止做多", emaGap);
+                log.warn("⚠️ EMA间距较窄（{}%），趋势可能减弱，但仍为金叉，不阻止做多", String.format("%.4f", emaGap));
                 // 🔥 不再返回true！金叉状态下不应阻止做多
             }
             

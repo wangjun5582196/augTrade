@@ -117,6 +117,63 @@ public class HistoricalDataController {
     }
     
     /**
+     * 获取币安XAUUSDT所有历史数据（从上线开始到现在）
+     * 币安XAUUSDT合约上线时间：2025-12-11
+     * 
+     * GET /api/historical/binance/xauusdt/all?interval=5m
+     * 
+     * @param interval K线周期，默认5m
+     * @return 抓取结果
+     */
+    @GetMapping("/binance/xauusdt/all")
+    public Map<String, Object> fetchBinanceXauusdtAll(
+            @RequestParam(defaultValue = "5m") String interval) {
+        
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // 币安XAUUSDT合约上线时间：2025-12-11
+            LocalDateTime start = LocalDateTime.parse("2025-12-11T00:00:00");
+            LocalDateTime end = LocalDateTime.now();
+            
+            long startTime = start.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long endTime = end.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            
+            log.info("========================================");
+            log.info("开始抓取币安XAUUSDT所有历史数据");
+            log.info("开始时间: 2025-12-11（XAUUSDT合约上线日期）");
+            log.info("结束时间: {}", end);
+            log.info("K线周期: {}", interval);
+            log.info("预计时间跨度: {}天", java.time.temporal.ChronoUnit.DAYS.between(start, end));
+            log.info("========================================");
+            
+            long execStartTime = System.currentTimeMillis();
+            int count = binanceFetcher.fetchHistoricalKlines("XAUUSDT", interval, startTime, endTime);
+            long duration = (System.currentTimeMillis() - execStartTime) / 1000;
+            
+            result.put("success", true);
+            result.put("symbol", "XAUUSDT");
+            result.put("interval", interval);
+            result.put("startDate", "2025-12-11");
+            result.put("endDate", end.toLocalDate().toString());
+            result.put("count", count);
+            result.put("duration", duration + "秒");
+            result.put("message", String.format("成功抓取从2025-12-11至今的%d条K线数据，耗时%d秒", count, duration));
+            
+            log.info("========================================");
+            log.info("✅ 抓取完成！共{}条数据，耗时{}秒", count, duration);
+            log.info("========================================");
+            
+        } catch (Exception e) {
+            log.error("抓取失败", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        
+        return result;
+    }
+    
+    /**
      * 自定义时间范围抓取
      * 
      * GET /api/historical/binance/xauusdt/custom?startDate=2025-01-01&endDate=2026-01-01&interval=1h

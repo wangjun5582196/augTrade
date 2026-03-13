@@ -79,14 +79,14 @@ public class SwingPointCalculator {
                 if (minutesSinceSwingHigh <= SWING_POINT_VALIDITY_MINUTES && 
                     breakoutPercent > BREAKOUT_THRESHOLD_PERCENT) {
                     isBreakingHigh = true;
-                    log.info("[SwingPointCalculator] ✅ 有效突破摆动高点: 价格{} > 高点{} (+{:.2f}%), 时效{}分钟", 
-                            currentPrice, lastSwingHigh.getPrice(), 
-                            breakoutPercent * 100, minutesSinceSwingHigh);
+                    log.info("[SwingPointCalculator] ✅ 有效突破摆动高点: 价格{} > 高点{} (+{}%), 时效{}分钟",
+                            currentPrice, lastSwingHigh.getPrice(),
+                            String.format("%.2f", breakoutPercent * 100), minutesSinceSwingHigh);
                 } else if (currentPrice.compareTo(lastSwingHigh.getPrice()) > 0) {
-                    log.warn("[SwingPointCalculator] ⚠️ 突破摆动高点但被过滤: 价格{} > 高点{} (+{:.2f}%), 时效{}分钟 (阈值:{}分钟, 幅度阈值:{:.2f}%)", 
-                            currentPrice, lastSwingHigh.getPrice(), 
-                            breakoutPercent * 100, minutesSinceSwingHigh,
-                            SWING_POINT_VALIDITY_MINUTES, BREAKOUT_THRESHOLD_PERCENT * 100);
+                    log.warn("[SwingPointCalculator] ⚠️ 突破摆动高点但被过滤: 价格{} > 高点{} (+{}%), 时效{}分钟 (阈值:{}分钟, 幅度阈值:{}%)",
+                            currentPrice, lastSwingHigh.getPrice(),
+                            String.format("%.2f", breakoutPercent * 100), minutesSinceSwingHigh,
+                            SWING_POINT_VALIDITY_MINUTES, String.format("%.2f", BREAKOUT_THRESHOLD_PERCENT * 100));
                 }
             }
             
@@ -103,9 +103,9 @@ public class SwingPointCalculator {
                 if (minutesSinceSwingLow <= SWING_POINT_VALIDITY_MINUTES && 
                     breakdownPercent > BREAKOUT_THRESHOLD_PERCENT) {
                     isBreakingLow = true;
-                    log.info("[SwingPointCalculator] ✅ 有效跌破摆动低点: 价格{} < 低点{} (-{:.2f}%), 时效{}分钟", 
-                            currentPrice, lastSwingLow.getPrice(), 
-                            breakdownPercent * 100, minutesSinceSwingLow);
+                    log.info("[SwingPointCalculator] ✅ 有效跌破摆动低点: 价格{} < 低点{} (-{}%), 时效{}分钟",
+                            currentPrice, lastSwingLow.getPrice(),
+                            String.format("%.2f", breakdownPercent * 100), minutesSinceSwingLow);
                 }
             }
             

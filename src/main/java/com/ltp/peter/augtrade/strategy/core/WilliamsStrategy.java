@@ -47,8 +47,11 @@ public class WilliamsStrategy implements Strategy {
         }
         
         try {
-            // 计算Williams %R
-            Double williamsR = williamsCalculator.calculate(context.getKlines());
+            // 优先从Context读取（StrategyOrchestrator已计算过，避免重复计算）
+            Double williamsR = context.getIndicator("WilliamsR");
+            if (williamsR == null) {
+                williamsR = williamsCalculator.calculate(context.getKlines());
+            }
             
             if (williamsR == null) {
                 log.warn("[{}] Williams %R 计算结果为空", STRATEGY_NAME);

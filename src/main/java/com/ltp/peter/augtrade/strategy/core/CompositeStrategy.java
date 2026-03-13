@@ -37,7 +37,7 @@ public class CompositeStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "Composite";
     private static final int STRATEGY_WEIGHT = 10;
-    private static final int SIGNAL_THRESHOLD = 6; // 🔥 降低阈值：从15→6，允许单个策略（如BollingerBreakout权重6）触发信号
+    private static final int SIGNAL_THRESHOLD = 10; // 修复：从6提高到10，防止单个低权重策略独立触发信号（需至少2个策略共识）
     
     @Autowired(required = false)
     private List<Strategy> strategies;
@@ -185,61 +185,14 @@ public class CompositeStrategy implements Strategy {
             
             // 根据得分生成信号
             if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                // 🔥 ML震荡过滤器 - 临时禁用 (2026-01-29)
-                // 原因：ML模型98.74%置信度将ADX=56.4的强趋势误判为震荡，导致无法开单
-                // TODO: 需要重新评估ML模型或调整过滤逻辑
-                /*
-                if (mlPredictionService != null) {
-                    try {
-                        MLPrediction mlPred = mlPredictionService.predict(context);
-                        
-                        if (mlPred != null) {
-                            // 场景1: ML高置信度识别为震荡（精确率94%！）
-                            if (mlPred.isHighConfidenceRanging()) {
-                                log.warn("[{}] ❌ ML识别为震荡期 (置信度:{}%，精确率94%)，拒绝开仓", 
-                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbHold() * 100));
-                                return createHoldSignal(
-                                        String.format("ML识别为震荡期(%.1f%%)，避免无效交易", 
-                                                mlPred.getProbHold() * 100),
-                                        buyScore, sellScore);
-                            }
-                            
-                            // 场景2: ML预测下跌
-                            if (mlPred.isHighConfidenceDown()) {
-                                log.warn("[{}] ⚠️ ML预测下跌 (概率:{}%)，拒绝做多", 
-                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbDown() * 100));
-                                return createHoldSignal(
-                                        String.format("ML预测下跌(%.1f%%)，避免逆势", 
-                                                mlPred.getProbDown() * 100),
-                                        buyScore, sellScore);
-                            }
-                            
-                            // 场景3: ML倾向震荡但不确定，降低仓位
-                            if (mlPred.isTrendingRanging()) {
-                                log.info("[{}] ⚠️ ML倾向震荡 (概率:{}%)，保守处理", 
-                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbHold() * 100));
-                                buyScore = (int)(buyScore * 0.7);  // 降低评分
-                                log.info("[{}] 📊 ML调整后评分: {}", STRATEGY_NAME, buyScore);
-                            }
-                            
-                            // 场景4: ML确认上涨（虽然精确率只有14%，但可以作为参考）
-                            if (mlPred.isHighConfidenceUp()) {
-                                log.info("[{}] ✅ ML高置信度支持做多 (概率:{}%)", 
-                                        STRATEGY_NAME, String.format("%.2f", mlPred.getProbUp() * 100));
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.error("[{}] ML预测异常，继续使用传统策略", STRATEGY_NAME, e);
-                    }
-                }
-                */
-                log.info("[{}] ℹ️ ML过滤器已禁用，使用传统技术指标策略", STRATEGY_NAME);
-                
-                // 🔥 P1优化-20260310: HMA趋势过滤器（做多信号检查）
+                // TODO: ML震荡过滤器待重新接入（模型需重训以修复强趋势误判问题）
+                // 相关类：MLPredictionEnhancedService，重训后取消此TODO并恢复过滤逻辑
+
+                // HMA趋势过滤器（做多信号检查）
                 HMACalculator.HMAResult hma = context.getIndicator("HMA");
                 if (hma != null && "DOWN".equals(hma.getTrend())) {
-                    log.warn("[{}] ⚠️ HMA下跌趋势，做多信号被否决 (HMA={}, 斜率={:.4f}%)", 
-                            STRATEGY_NAME, hma.getHma20(), hma.getSlope() * 100);
+                    log.warn("[{}] ⚠️ HMA下跌趋势，做多信号被否决 (HMA={}, 斜率={}%)",
+                            STRATEGY_NAME, hma.getHma20(), String.format("%.4f", hma.getSlope() * 100));
                     return createHoldSignal("HMA趋势相反，拒绝做多", buyScore, sellScore);
                 }
                 
@@ -323,8 +276,8 @@ public class CompositeStrategy implements Strategy {
                 // 🔥 P1优化-20260310: HMA趋势过滤器（做空信号检查）
                 HMACalculator.HMAResult hma = context.getIndicator("HMA");
                 if (hma != null && "UP".equals(hma.getTrend())) {
-                    log.warn("[{}] ⚠️ HMA上涨趋势，做空信号被否决 (HMA={}, 斜率={:.4f}%)", 
-                            STRATEGY_NAME, hma.getHma20(), hma.getSlope() * 100);
+                    log.warn("[{}] ⚠️ HMA上涨趋势，做空信号被否决 (HMA={}, 斜率={}%)",
+                            STRATEGY_NAME, hma.getHma20(), String.format("%.4f", hma.getSlope() * 100));
                     return createHoldSignal("HMA趋势相反，拒绝做空", buyScore, sellScore);
                 }
                 
@@ -537,16 +490,16 @@ public class CompositeStrategy implements Strategy {
             if (priceVal > adjustedUpper) {
                 double exceedsPercent = (priceVal - upper) / upper * 100;
                 if (bbTolerance > 0) {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 调整后上轨{}（原上轨{}, 容忍度{}%, 实际超出{:.2f}%）", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), 
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 调整后上轨{}（原上轨{}, 容忍度{}%, 实际超出{}%）",
+                            STRATEGY_NAME, String.format("%.2f", priceVal),
                             String.format("%.2f", adjustedUpper),
-                            String.format("%.2f", upper), 
+                            String.format("%.2f", upper),
                             String.format("%.1f", bbTolerance * 100),
-                            exceedsPercent);
+                            String.format("%.2f", exceedsPercent));
                 } else {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{:.2f}%），禁止追高！", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), 
-                            String.format("%.2f", upper), exceedsPercent);
+                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{}%），禁止追高！",
+                            STRATEGY_NAME, String.format("%.2f", priceVal),
+                            String.format("%.2f", upper), String.format("%.2f", exceedsPercent));
                 }
                 return false;
             }
@@ -554,9 +507,9 @@ public class CompositeStrategy implements Strategy {
             // 如果价格在原始上轨之上但在容忍范围内，记录趋势突破日志
             if (priceVal > upper && priceVal <= adjustedUpper) {
                 double exceedsPercent = (priceVal - upper) / upper * 100;
-                log.info("[{}] 🔥 趋势突破放行: 价格{} > 原上轨{}（超出{:.2f}%），ADX={}, EMA趋势={}，容忍度{}%内放行", 
-                        STRATEGY_NAME, String.format("%.2f", priceVal), 
-                        String.format("%.2f", upper), exceedsPercent,
+                log.info("[{}] 🔥 趋势突破放行: 价格{} > 原上轨{}（超出{}%），ADX={}, EMA趋势={}，容忍度{}%内放行",
+                        STRATEGY_NAME, String.format("%.2f", priceVal),
+                        String.format("%.2f", upper), String.format("%.2f", exceedsPercent),
                         adx != null ? String.format("%.1f", adx) : "N/A",
                         emaTrend != null ? emaTrend.getTrendDescription() : "N/A",
                         String.format("%.1f", bbTolerance * 100));
@@ -566,8 +519,8 @@ public class CompositeStrategy implements Strategy {
             if (priceVal <= upper) {
                 double distFromMiddle = (priceVal - middle) / (upper - middle);
                 if (distFromMiddle > 0.8) {
-                    log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{:.0f}%），信号质量降低", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), distFromMiddle * 100);
+                    log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{}%），信号质量降低",
+                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.0f", distFromMiddle * 100));
                 }
             }
             
@@ -767,17 +720,21 @@ public class CompositeStrategy implements Strategy {
                         bullishCount++;  // 🔥 P2: 统计看涨指标
                         buyReasons.add(String.format("强劲上涨动量(4分,M2=%.2f%%,M5=%.2f%%)", 
                                 momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
-                        log.info("[{}] 📈 动量指标: 强劲上涨 (M2={} +{:.2f}%, M5={} +{:.2f}%)", 
-                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum2Ratio() * 100,
-                                momentum.getMomentum5(), momentum.getMomentum5Ratio() * 100);
+                        log.info("[{}] 📈 动量指标: 强劲上涨 (M2={} +{}%, M5={} +{}%)",
+                                STRATEGY_NAME, momentum.getMomentum2(),
+                                String.format("%.2f", momentum.getMomentum2Ratio() * 100),
+                                momentum.getMomentum5(),
+                                String.format("%.2f", momentum.getMomentum5Ratio() * 100));
                     } else if (momentum.isStrongDown()) {
                         sellScore += 4;
                         bearishCount++;  // 🔥 P2: 统计看跌指标
                         sellReasons.add(String.format("强劲下跌动量(4分,M2=%.2f%%,M5=%.2f%%)", 
                                 momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
-                        log.info("[{}] 📉 动量指标: 强劲下跌 (M2={} {:.2f}%, M5={} {:.2f}%)", 
-                                STRATEGY_NAME, momentum.getMomentum2(), momentum.getMomentum2Ratio() * 100,
-                                momentum.getMomentum5(), momentum.getMomentum5Ratio() * 100);
+                        log.info("[{}] 📉 动量指标: 强劲下跌 (M2={} {}%, M5={} {}%)",
+                                STRATEGY_NAME, momentum.getMomentum2(),
+                                String.format("%.2f", momentum.getMomentum2Ratio() * 100),
+                                momentum.getMomentum5(),
+                                String.format("%.2f", momentum.getMomentum5Ratio() * 100));
                     }
                     
                     // 将动量数据存入context供后续使用
@@ -798,14 +755,14 @@ public class CompositeStrategy implements Strategy {
                         buyScore += 5;
                         bullishCount++;  // 🔥 P2: 统计看涨指标
                         buyReasons.add(String.format("放量阳线(5分,比率%.2f)", volume.getVolumeRatio()));
-                        log.info("[{}] 📊 成交量突破: 放量阳线 (比率={:.2f}, K线涨幅={})", 
-                                STRATEGY_NAME, volume.getVolumeRatio(), klineChange);
+                        log.info("[{}] 📊 成交量突破: 放量阳线 (比率={}, K线涨幅={})",
+                                STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
                     } else if (klineChange.compareTo(BigDecimal.ZERO) < 0) {
                         sellScore += 5;
                         bearishCount++;  // 🔥 P2: 统计看跌指标
                         sellReasons.add(String.format("放量阴线(5分,比率%.2f)", volume.getVolumeRatio()));
-                        log.info("[{}] 📊 成交量突破: 放量阴线 (比率={:.2f}, K线跌幅={})", 
-                                STRATEGY_NAME, volume.getVolumeRatio(), klineChange);
+                        log.info("[{}] 📊 成交量突破: 放量阴线 (比率={}, K线跌幅={})",
+                                STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
                     }
                     
                     // 将成交量数据存入context
@@ -857,8 +814,9 @@ public class CompositeStrategy implements Strategy {
             if (hmaCalculator != null) {
                 HMACalculator.HMAResult hma = hmaCalculator.calculate(context.getKlines());
                 if (hma != null) {
-                    log.info("[{}] 📐 HMA: 趋势={}, 斜率={:.4f}%, 价格{}HMA", 
-                            STRATEGY_NAME, hma.getTrend(), hma.getSlope(),
+                    log.info("[{}] 📐 HMA: 趋势={}, 斜率={}%, 价格{}HMA",
+                            STRATEGY_NAME, hma.getTrend(),
+                            String.format("%.4f", hma.getSlope()),
                             hma.isPriceAboveHMA() ? "在上方" : "在下方");
                     
                     // 🔥 P1优化-20260310: HMA不直接评分，但统计方向用于冲突检测

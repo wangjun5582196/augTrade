@@ -311,20 +311,37 @@ public class BinanceFuturesTradingService {
     
     /**
      * 平掉所有持仓
+     * 逐仓处理，单仓失败不阻断其他仓位，最终汇总失败信息并抛出异常
      */
     public boolean closeAllPositions(String symbol) throws Exception {
         List<Position> positions = getOpenPositions(symbol);
-        
+
+        if (positions.isEmpty()) {
+            log.info("无持仓需要平仓: {}", symbol);
+            return true;
+        }
+
+        List<String> failures = new ArrayList<>();
         for (Position position : positions) {
             // 平多仓：SELL LONG
             // 平空仓：BUY SHORT
             String side = "LONG".equals(position.getDirection()) ? "SELL" : "BUY";
             String positionSide = position.getDirection();
             String quantity = position.getQuantity().toPlainString();
-            
-            placeMarketOrder(symbol, side, positionSide, quantity, position.getLeverage());
+
+            try {
+                placeMarketOrder(symbol, side, positionSide, quantity, position.getLeverage());
+                log.info("✅ 平仓成功: {} {} {} 数量={}", symbol, side, positionSide, quantity);
+            } catch (Exception e) {
+                String errMsg = String.format("%s %s 数量=%s: %s", symbol, positionSide, quantity, e.getMessage());
+                log.error("❌ 平仓失败: {} - 请手动检查！", errMsg, e);
+                failures.add(errMsg);
+            }
         }
-        
+
+        if (!failures.isEmpty()) {
+            throw new Exception("以下持仓平仓失败，请立即手动处理！\n" + String.join("\n", failures));
+        }
         return true;
     }
     

@@ -56,9 +56,9 @@ public class MomentumCalculator {
             boolean isStrongDown = momentum2Ratio < -MOMENTUM_THRESHOLD_PERCENT && 
                                   momentum5Ratio < -MOMENTUM_THRESHOLD_PERCENT;
             
-            log.debug("[MomentumCalculator] 当前价:{}, 2根前:{}, 5根前:{}, M2:{} ({:.4f}%), M5:{} ({:.4f}%), 强上涨:{}, 强下跌:{}", 
-                    currentPrice, price2, price5, momentum2, momentum2Ratio * 100, 
-                    momentum5, momentum5Ratio * 100, isStrongUp, isStrongDown);
+            log.debug("[MomentumCalculator] 当前价:{}, 2根前:{}, 5根前:{}, M2:{} ({}%), M5:{} ({}%), 强上涨:{}, 强下跌:{}",
+                    currentPrice, price2, price5, momentum2, String.format("%.4f", momentum2Ratio * 100),
+                    momentum5, String.format("%.4f", momentum5Ratio * 100), isStrongUp, isStrongDown);
             
             return MomentumResult.builder()
                     .momentum2(momentum2)

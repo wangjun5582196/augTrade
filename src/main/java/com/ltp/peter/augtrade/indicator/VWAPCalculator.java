@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * VWAP - 成交量加权平均价 (Volume Weighted Average Price)
@@ -49,14 +50,30 @@ public class VWAPCalculator implements TechnicalIndicator<VWAPCalculator.VWAPRes
             return null;
         }
 
-        int actualPeriod = Math.min(period, klines.size());
+        // 按交易日重置：VWAP只使用当日K线，避免跨日计算失去参考意义
+        // 以最新K线的日期为基准，过滤出当日数据
+        List<Kline> workingKlines = klines;
+        if (klines.get(0).getTimestamp() != null) {
+            LocalDate latestDate = klines.get(0).getTimestamp().toLocalDate();
+            List<Kline> todayKlines = klines.stream()
+                    .filter(k -> k.getTimestamp() != null && k.getTimestamp().toLocalDate().equals(latestDate))
+                    .collect(Collectors.toList());
+            if (todayKlines.size() >= 5) {
+                workingKlines = todayKlines;
+                log.debug("[VWAP] 使用当日{}根K线计算（日期：{}）", workingKlines.size(), latestDate);
+            } else {
+                log.debug("[VWAP] 当日K线不足5根（{}根），降级使用最近{}根K线", todayKlines.size(), Math.min(period, klines.size()));
+            }
+        }
+
+        int actualPeriod = Math.min(period, workingKlines.size());
 
         BigDecimal totalPV = BigDecimal.ZERO;   // Σ(TP * Volume)
         BigDecimal totalVolume = BigDecimal.ZERO; // Σ(Volume)
         BigDecimal totalPV2 = BigDecimal.ZERO;  // Σ(TP² * Volume) 用于计算标准差
 
         for (int i = 0; i < actualPeriod; i++) {
-            Kline kline = klines.get(i);
+            Kline kline = workingKlines.get(i);
             // 典型价格 = (High + Low + Close) / 3
             BigDecimal tp = kline.getHighPrice()
                     .add(kline.getLowPrice())

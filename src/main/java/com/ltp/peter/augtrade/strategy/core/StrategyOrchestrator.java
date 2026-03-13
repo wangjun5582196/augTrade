@@ -78,7 +78,7 @@ public class StrategyOrchestrator {
      * @return 交易信号
      */
     public TradingSignal generateSignal(String symbol) {
-        return generateSignal(symbol, 100);
+        return generateSignal(symbol, 200); // 200根K线（约16.7小时），保证长周期指标（EMA50/ADX）有足够数据
     }
     
     /**

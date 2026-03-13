@@ -73,18 +73,16 @@ public class BinanceHistoricalDataFetcher {
             while (currentStart < endTime) {
                 batchCount++;
                 
-                // 计算本批次的结束时间
-                long batchEnd = Math.min(endTime, currentStart + (LIMIT * intervalMillis));
-                
+                // 不指定endTime，让币安API返回从startTime开始的limit条数据
                 String url = String.format(
-                    "%s/fapi/v1/klines?symbol=%s&interval=%s&startTime=%d&endTime=%d&limit=%d",
-                    BINANCE_FUTURES_API, symbol, interval, currentStart, batchEnd, LIMIT
+                    "%s/fapi/v1/klines?symbol=%s&interval=%s&startTime=%d&limit=%d",
+                    BINANCE_FUTURES_API, symbol, interval, currentStart, LIMIT
                 );
                 
-                log.info("第{}批 - 请求时间范围: {} 至 {}", 
+                log.info("第{}批 - 请求开始时间: {}, 请求数量: {}", 
                     batchCount,
                     LocalDateTime.ofInstant(Instant.ofEpochMilli(currentStart), ZoneId.systemDefault()),
-                    LocalDateTime.ofInstant(Instant.ofEpochMilli(batchEnd), ZoneId.systemDefault()));
+                    LIMIT);
                 
                 Request request = new Request.Builder()
                         .url(url)
@@ -179,14 +177,14 @@ public class BinanceHistoricalDataFetcher {
                                 batchCount, klines.size(), inserted, duplicates, totalCount);
                     }
                     
-                    // 如果获取的数据量少于限制，说明已经到达数据终点
-                    if (list.size() < LIMIT) {
-                        log.info("已获取全部数据");
-                        break;
-                    }
-                    
                     // 更新下次请求的开始时间为本批次最新的时间戳+1个周期
                     currentStart = latestTimestamp + intervalMillis;
+                    
+                    // 如果获取的数据量少于限制，说明已经到达数据终点
+                    if (list.size() < LIMIT) {
+                        log.info("已获取全部数据（本批{}条 < 限制{}条）", list.size(), LIMIT);
+                        break;
+                    }
                     
                     // 如果下一个开始时间已经超过结束时间，结束循环
                     if (currentStart >= endTime) {

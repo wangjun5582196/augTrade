@@ -54,12 +54,12 @@ public class SupertrendStrategy implements Strategy {
             OBVCalculator.OBVResult obv = context.getIndicator("OBV");
             Double adx = context.getIndicator("ADX");
 
-            log.debug("[{}] Supertrend={}, 趋势={}, 翻转={}, 距离={:.3f}%",
+            log.debug("[{}] Supertrend={}, 趋势={}, 翻转={}, 距离={}%",
                     STRATEGY_NAME,
                     String.format("%.2f", st.getSupertrendValue()),
                     st.getTrendDescription(),
                     st.isTrendChanged(),
-                    st.getDistancePercent());
+                    String.format("%.3f", st.getDistancePercent()));
 
             // ========== 做多信号 ==========
 
@@ -114,8 +114,8 @@ public class SupertrendStrategy implements Strategy {
             if (st.isUpTrend() && st.getDistancePercent() >= 0.1 && st.getDistancePercent() <= 0.5) {
                 boolean noBearishDivergence = obv == null || !obv.isBearishDivergence();
                 if (noBearishDivergence) {
-                    log.info("[{}] 📈 Supertrend上升回踩支撑(距离{:.3f}%)",
-                            STRATEGY_NAME, st.getDistancePercent());
+                    log.info("[{}] 📈 Supertrend上升回踩支撑(距离{}%)",
+                            STRATEGY_NAME, String.format("%.3f", st.getDistancePercent()));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.BUY)
                             .strength(65)
@@ -136,8 +136,8 @@ public class SupertrendStrategy implements Strategy {
             if (st.isUpTrend() && st.getDistancePercent() > 0.5) {
                 // 只在ADX极强时才给信号
                 if (adx != null && adx >= 40) {
-                    log.info("[{}] 📊 Supertrend强趋势延续(距离{:.3f}%, ADX={})",
-                            STRATEGY_NAME, st.getDistancePercent(), String.format("%.1f", adx));
+                    log.info("[{}] 📊 Supertrend强趋势延续(距离{}%, ADX={})",
+                            STRATEGY_NAME, String.format("%.3f", st.getDistancePercent()), String.format("%.1f", adx));
                     return TradingSignal.builder()
                             .type(TradingSignal.SignalType.BUY)
                             .strength(50)

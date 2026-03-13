@@ -107,8 +107,8 @@ public class OBVCalculator implements TechnicalIndicator<OBVCalculator.OBVResult
         // OBV是否在EMA上方（量能积极）
         result.setObvAboveEma(currentOBV > obvEma);
 
-        log.debug("[OBV] OBV={:.0f}, EMA={:.0f}, 趋势={:.0f}, 量价确认={}, 背离={}",
-                currentOBV, obvEma, obvTrend,
+        log.debug("[OBV] OBV={}, EMA={}, 趋势={}, 量价确认={}, 背离={}",
+                String.format("%.0f", currentOBV), String.format("%.0f", obvEma), String.format("%.0f", obvTrend),
                 result.isVolumeConfirmed() ? "是" : "否",
                 result.hasDivergence() ? (result.isBearishDivergence() ? "看跌" : "看涨") : "无");
 
