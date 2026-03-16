@@ -188,6 +188,17 @@ public class CompositeStrategy implements Strategy {
                 // TODO: ML震荡过滤器待重新接入（模型需重训以修复强趋势误判问题）
                 // 相关类：MLPredictionEnhancedService，重训后取消此TODO并恢复过滤逻辑
 
+                // 🔥 P1新增-20260316: 宏观趋势过滤器（做多信号检查）
+                // 当多时间框架显示明确下跌趋势时，拒绝做多（防止在大跌中抄底）
+                String macroTrend = context.getIndicator("MacroTrend");
+                Double macroPriceChange = context.getIndicator("MacroPriceChange");
+                if ("MACRO_DOWN".equals(macroTrend) && macroPriceChange != null && macroPriceChange < -0.5) {
+                    log.warn("[{}] ⚠️ 宏观下跌趋势，做多信号被否决 (5小时变化: {}%)",
+                            STRATEGY_NAME, String.format("%.2f", macroPriceChange));
+                    return createHoldSignal(String.format("宏观下跌趋势(%.2f%%)，拒绝做多", macroPriceChange),
+                            buyScore, sellScore);
+                }
+
                 // HMA趋势过滤器（做多信号检查）
                 HMACalculator.HMAResult hma = context.getIndicator("HMA");
                 if (hma != null && "DOWN".equals(hma.getTrend())) {
@@ -273,6 +284,16 @@ public class CompositeStrategy implements Strategy {
                             buyScore, sellScore);
                 }
                 
+                // 🔥 P1新增-20260316: 宏观趋势过滤器（做空信号检查）
+                String macroTrendSell = context.getIndicator("MacroTrend");
+                Double macroPriceChangeSell = context.getIndicator("MacroPriceChange");
+                if ("MACRO_UP".equals(macroTrendSell) && macroPriceChangeSell != null && macroPriceChangeSell > 0.5) {
+                    log.warn("[{}] ⚠️ 宏观上涨趋势，做空信号被否决 (5小时变化: +{}%)",
+                            STRATEGY_NAME, String.format("%.2f", macroPriceChangeSell));
+                    return createHoldSignal(String.format("宏观上涨趋势(+%.2f%%)，拒绝做空", macroPriceChangeSell),
+                            buyScore, sellScore);
+                }
+
                 // 🔥 P1优化-20260310: HMA趋势过滤器（做空信号检查）
                 HMACalculator.HMAResult hma = context.getIndicator("HMA");
                 if (hma != null && "UP".equals(hma.getTrend())) {

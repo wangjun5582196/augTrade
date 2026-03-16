@@ -202,9 +202,52 @@ public class TrendFilterStrategy implements Strategy {
                 }
                 
             } else {
-                // 震荡整理：观望，让其他策略决定
-                log.info("[{}] ⚠️ 震荡整理，无明确趋势，观望", STRATEGY_NAME);
-                return createHoldSignal("震荡整理，无明确趋势");
+                // 🔥 P0修复-20260316: 震荡时根据EMA交叉方向提供趋势偏好（否决权模式）
+                // 问题回顾：之前在EMA死叉+价格反弹时返回HOLD，导致TrendFilter(权重12)弃权
+                //   其他策略(如Supertrend=8)单独推动做多，在下跌趋势中逆势开仓亏损$151
+                // 修复：EMA死叉时仍投SELL票（降低权重），阻止做多信号通过
+
+                if (trend.isBearishCross()) {
+                    // EMA死叉：中期趋势偏空，即使价格暂时在EMA20上方（死猫反弹）
+                    int strength = Math.min(50 + trendStrength / 3, 70);
+                    String reason = String.format("EMA死叉偏空（价格反弹中）- %s (强度:%d)", trendDesc, trendStrength);
+
+                    log.info("[{}] 📉 EMA死叉，中期偏空，投SELL票防止逆势做多（权重:{}，强度:{}）",
+                            STRATEGY_NAME, STRATEGY_WEIGHT, strength);
+
+                    return TradingSignal.builder()
+                            .type(TradingSignal.SignalType.SELL)
+                            .strength(strength)
+                            .score(STRATEGY_WEIGHT)
+                            .strategyName(STRATEGY_NAME)
+                            .reason(reason)
+                            .symbol(context.getSymbol())
+                            .currentPrice(context.getCurrentPrice())
+                            .build();
+
+                } else if (trend.isBullishCross()) {
+                    // EMA金叉：中期趋势偏多，即使价格暂时在EMA20下方（回调）
+                    int strength = Math.min(50 + trendStrength / 3, 70);
+                    String reason = String.format("EMA金叉偏多（价格回调中）- %s (强度:%d)", trendDesc, trendStrength);
+
+                    log.info("[{}] 📈 EMA金叉，中期偏多，投BUY票防止逆势做空（权重:{}，强度:{}）",
+                            STRATEGY_NAME, STRATEGY_WEIGHT, strength);
+
+                    return TradingSignal.builder()
+                            .type(TradingSignal.SignalType.BUY)
+                            .strength(strength)
+                            .score(STRATEGY_WEIGHT)
+                            .strategyName(STRATEGY_NAME)
+                            .reason(reason)
+                            .symbol(context.getSymbol())
+                            .currentPrice(context.getCurrentPrice())
+                            .build();
+
+                } else {
+                    // EMA几乎重合，无方向偏好
+                    log.info("[{}] ⚠️ 震荡整理，EMA无交叉偏好，观望", STRATEGY_NAME);
+                    return createHoldSignal("震荡整理，无明确趋势");
+                }
             }
             
         } catch (Exception e) {

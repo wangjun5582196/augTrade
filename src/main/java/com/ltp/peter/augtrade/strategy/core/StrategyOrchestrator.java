@@ -101,7 +101,14 @@ public class StrategyOrchestrator {
             }
             
             log.debug("[StrategyOrchestrator] 获取到 {} 根K线", klines.size());
-            
+
+            // 🔥 P0新增-20260316: K线数据质量校验
+            // 防止在volume=0或flat candle（OHLC相同）等无效数据上做出交易决策
+            if (!validateKlineQuality(klines)) {
+                log.error("[StrategyOrchestrator] ❌ K线数据质量不合格，拒绝生成信号");
+                return createErrorSignal(symbol, "K线数据质量不合格（存在大量无效K线）");
+            }
+
             // 2. 获取当前价格（最新的K线在最前面）
             BigDecimal currentPrice = klines.get(0).getClosePrice();
             
@@ -274,7 +281,10 @@ public class StrategyOrchestrator {
                 log.info("[StrategyOrchestrator] OBV: {}", obv.getVolumeDescription());
             }
             
-            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标（含VWAP/Supertrend/OBV）", context.getIndicators().size());
+            // 🔥 P1新增-20260316: 多时间框架宏观趋势
+            calculateMacroTrend(context);
+
+            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标（含VWAP/Supertrend/OBV/MacroTrend）", context.getIndicators().size());
             
         } catch (Exception e) {
             log.error("[StrategyOrchestrator] 计算技术指标时发生错误", e);
@@ -310,6 +320,101 @@ public class StrategyOrchestrator {
         }
     }
     
+    /**
+     * 🔥 P0新增-20260316: K线数据质量校验
+     *
+     * 检查最近的K线是否存在质量问题：
+     * - volume=0 的K线（数据源故障）
+     * - flat candle（OHLC完全相同，表示无真实交易数据）
+     *
+     * 如果最近20根K线中有3根以上无效，拒绝交易
+     */
+    private boolean validateKlineQuality(List<Kline> klines) {
+        int checkCount = Math.min(20, klines.size());
+        int invalidCount = 0;
+
+        for (int i = 0; i < checkCount; i++) {
+            Kline kline = klines.get(i);
+
+            // 检查volume=0
+            boolean zeroVolume = kline.getVolume() != null
+                    && kline.getVolume().compareTo(BigDecimal.ZERO) == 0;
+
+            // 检查flat candle（OHLC完全相同）
+            boolean flatCandle = kline.getOpenPrice().compareTo(kline.getHighPrice()) == 0
+                    && kline.getHighPrice().compareTo(kline.getLowPrice()) == 0
+                    && kline.getLowPrice().compareTo(kline.getClosePrice()) == 0;
+
+            if (zeroVolume || flatCandle) {
+                invalidCount++;
+            }
+        }
+
+        if (invalidCount > 0) {
+            log.warn("[StrategyOrchestrator] ⚠️ K线质量: 最近{}根中有{}根无效（volume=0或flat candle）",
+                    checkCount, invalidCount);
+        }
+
+        // 最近20根中有3根以上无效，拒绝交易
+        if (invalidCount >= 3) {
+            log.error("[StrategyOrchestrator] ❌ 无效K线过多（{}/{}），数据源可能故障",
+                    invalidCount, checkCount);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * 🔥 P1新增-20260316: 计算多时间框架宏观趋势
+     *
+     * 用较长周期的价格变化判断大趋势方向，弥补5分钟EMA的滞后性
+     * 计算最近60根K线（5小时）的价格变化方向和幅度
+     */
+    private void calculateMacroTrend(MarketContext context) {
+        List<Kline> klines = context.getKlines();
+
+        // 需要至少60根K线（5小时数据）
+        int lookback = Math.min(60, klines.size() - 1);
+        if (lookback < 30) {
+            log.debug("[StrategyOrchestrator] K线不足30根，跳过宏观趋势计算");
+            return;
+        }
+
+        BigDecimal currentPrice = klines.get(0).getClosePrice();
+        BigDecimal pastPrice = klines.get(lookback).getClosePrice();
+        double priceChangePercent = currentPrice.subtract(pastPrice)
+                .divide(pastPrice, 6, BigDecimal.ROUND_HALF_UP)
+                .doubleValue() * 100;
+
+        // 统计区间内涨跌K线比例
+        int upCount = 0;
+        int downCount = 0;
+        for (int i = 0; i < lookback; i++) {
+            BigDecimal close = klines.get(i).getClosePrice();
+            BigDecimal prevClose = klines.get(i + 1).getClosePrice();
+            int cmp = close.compareTo(prevClose);
+            if (cmp > 0) upCount++;
+            else if (cmp < 0) downCount++;
+        }
+
+        String macroTrend;
+        if (priceChangePercent > 0.3 && upCount > downCount) {
+            macroTrend = "MACRO_UP";
+        } else if (priceChangePercent < -0.3 && downCount > upCount) {
+            macroTrend = "MACRO_DOWN";
+        } else {
+            macroTrend = "MACRO_NEUTRAL";
+        }
+
+        context.addIndicator("MacroTrend", macroTrend);
+        context.addIndicator("MacroPriceChange", priceChangePercent);
+
+        log.info("[StrategyOrchestrator] 📊 宏观趋势({}根K线): {} (变化: {}%, 涨:{}/跌:{})",
+                lookback, macroTrend,
+                String.format("%.2f", priceChangePercent), upCount, downCount);
+    }
+
     /**
      * 创建错误信号
      */

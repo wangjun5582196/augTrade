@@ -834,6 +834,72 @@ public class PaperTradingService {
             if (signal != null) {
                 order.setSignalStrength(signal.getStrength());
                 order.setSignalScore(signal.getScore());
+
+                // 🔥 P2修复-20260316: 保存V1.5字段（之前PaperTradingService未保存这些字段）
+                // buyScore / sellScore
+                order.setBuyScore(signal.getBuyScore());
+                order.setSellScore(signal.getSellScore());
+
+                // signalReasons
+                if (signal.getBuyReasons() != null && !signal.getBuyReasons().isEmpty()) {
+                    order.setSignalReasons(String.join(",", signal.getBuyReasons()));
+                } else if (signal.getSellReasons() != null && !signal.getSellReasons().isEmpty()) {
+                    order.setSignalReasons(String.join(",", signal.getSellReasons()));
+                }
+
+                // 动量指标
+                if (signal.getMomentum2() != null) {
+                    order.setMomentum2(signal.getMomentum2());
+                }
+                if (signal.getMomentum5() != null) {
+                    order.setMomentum5(signal.getMomentum5());
+                }
+
+                // 成交量
+                if (signal.getVolumeRatio() != null) {
+                    order.setVolumeRatio(signal.getVolumeRatio());
+                }
+                if (signal.getCurrentVolume() != null) {
+                    order.setCurrentVolume(signal.getCurrentVolume());
+                }
+                if (signal.getAvgVolume() != null) {
+                    order.setAvgVolume(signal.getAvgVolume());
+                }
+
+                // 摆动点
+                if (signal.getLastSwingHigh() != null) {
+                    order.setSwingHigh(signal.getLastSwingHigh());
+                }
+                if (signal.getLastSwingLow() != null) {
+                    order.setSwingLow(signal.getLastSwingLow());
+                }
+
+                // HMA
+                if (signal.getHma20() != null) {
+                    order.setHma20(signal.getHma20());
+                }
+                if (signal.getHma20Slope() != null) {
+                    order.setHmaSlope(BigDecimal.valueOf(signal.getHma20Slope()));
+                    // 从斜率推导趋势
+                    if (signal.getHma20Slope() > 0.0001) {
+                        order.setHmaTrend("UP");
+                    } else if (signal.getHma20Slope() < -0.0001) {
+                        order.setHmaTrend("DOWN");
+                    } else {
+                        order.setHmaTrend("FLAT");
+                    }
+                }
+
+                // 价格位置和趋势确认
+                if (signal.getPricePosition() != null) {
+                    order.setPricePosition(signal.getPricePosition());
+                }
+                if (signal.getTrendConfirmed() != null) {
+                    order.setTrendConfirmed(signal.getTrendConfirmed());
+                }
+
+                // 注: signal_generate_time / signal_to_order_delay 列已存在于DB
+                // 但TradeOrder实体暂未映射这两个字段，后续可补充
             }
             
             // 🔥 新增-20260213: VWAP指标

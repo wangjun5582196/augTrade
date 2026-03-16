@@ -40,6 +40,16 @@ public class RiskManagementService {
     
     @Value("${trading.risk.max-drawdown-percent:5.0}")
     private BigDecimal maxDrawdownPercent;
+
+    // 🔥 P1新增-20260316: 亏损冷却期配置
+    @Value("${trading.risk.cooldown.enabled:true}")
+    private boolean cooldownEnabled;
+
+    @Value("${trading.risk.cooldown.loss-threshold:50.0}")
+    private BigDecimal cooldownLossThreshold;
+
+    @Value("${trading.risk.cooldown.minutes:120}")
+    private int cooldownMinutes;
     
     /**
      * 交易前风控检查
@@ -70,7 +80,13 @@ public class RiskManagementService {
             log.warn("⛔ 单仓位模式：已存在未平仓持仓，必须先止盈/止损后才能开新仓");
             return false;
         }
-        
+
+        // 🔥 P1新增-20260316: 亏损冷却期检查
+        // 上一笔同方向订单大额亏损后，暂停同方向交易一段时间
+        if (cooldownEnabled && !checkCooldown(symbol, isBuy)) {
+            return false;
+        }
+
         log.info("✅ 风控检查通过 - 允许开仓");
         return true;
     }
@@ -206,6 +222,58 @@ public class RiskManagementService {
         return false;
     }
     
+    /**
+     * 🔥 P1新增-20260316: 亏损冷却期检查
+     *
+     * 当上一笔同方向订单大额亏损时，在冷却期内禁止同方向交易
+     * 防止在持续亏损的方向上连续开仓
+     *
+     * @param symbol 交易品种
+     * @param isBuy 当前方向是否为做多
+     * @return true=允许交易, false=冷却期内禁止
+     */
+    private boolean checkCooldown(String symbol, boolean isBuy) {
+        try {
+            String side = isBuy ? "BUY" : "SELL";
+            LocalDateTime cooldownStart = LocalDateTime.now().minusMinutes(cooldownMinutes);
+
+            // 查询冷却期内同方向的最近一笔已平仓订单
+            List<TradeOrder> recentOrders = tradeOrderMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<TradeOrder>()
+                    .eq(TradeOrder::getSymbol, symbol)
+                    .eq(TradeOrder::getSide, side)
+                    .ge(TradeOrder::getCreateTime, cooldownStart)
+                    .isNotNull(TradeOrder::getProfitLoss)
+                    .orderByDesc(TradeOrder::getCreateTime)
+                    .last("LIMIT 1")
+            );
+
+            if (recentOrders.isEmpty()) {
+                return true;
+            }
+
+            TradeOrder lastOrder = recentOrders.get(0);
+            if (lastOrder.getProfitLoss() != null
+                    && lastOrder.getProfitLoss().compareTo(BigDecimal.ZERO) < 0
+                    && lastOrder.getProfitLoss().abs().compareTo(cooldownLossThreshold) >= 0) {
+
+                long minutesAgo = java.time.Duration.between(lastOrder.getCreateTime(), LocalDateTime.now()).toMinutes();
+                long remainingMinutes = cooldownMinutes - minutesAgo;
+
+                log.warn("⛔ 亏损冷却期: 上一笔{}订单亏损${}, 冷却期还剩{}分钟（阈值${}，冷却{}分钟）",
+                        side, lastOrder.getProfitLoss().abs(),
+                        remainingMinutes, cooldownLossThreshold, cooldownMinutes);
+                return false;
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            log.error("检查亏损冷却期失败", e);
+            return true; // 异常时不阻止交易
+        }
+    }
+
     /**
      * 获取风控统计信息
      */

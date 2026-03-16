@@ -300,11 +300,11 @@ public class TradingScheduler {
         // 交易时段过滤：跳过低流动性时段
         // 黄金活跃时段：伦敦盘(UTC 07:00-16:00) + 纽约盘(UTC 13:00-21:00)
         // 跳过亚洲夜盘(UTC 22:00-06:00)：点差大、假突破多、流动性差
-        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
-        if (utcHour >= 22 || utcHour < 6) {
-            log.debug("⏰ UTC {}:xx 处于低流动性时段(22:00-06:00)，跳过本轮策略", utcHour);
-            return;
-        }
+//        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
+//        if (utcHour >= 22 || utcHour < 6) {
+//            log.debug("⏰ UTC {}:xx 处于低流动性时段(22:00-06:00)，跳过本轮策略", utcHour);
+//            return;
+//        }
 
         // 🔥 优先使用币安（如果启用）
         if (binanceEnabled && binanceFuturesService != null) {

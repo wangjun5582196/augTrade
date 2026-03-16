@@ -174,6 +174,22 @@ public class EMACalculator implements TechnicalIndicator<Double> {
         public boolean isSideways() {
             return !isUpTrend() && !isDownTrend();
         }
+
+        /**
+         * 🔥 新增-20260316: 判断EMA是否为死叉（短期EMA低于长期EMA）
+         * 即使价格暂时高于EMA20（死猫反弹），死叉依然表明中期趋势偏空
+         */
+        public boolean isBearishCross() {
+            return emaShort < emaLong;
+        }
+
+        /**
+         * 🔥 新增-20260316: 判断EMA是否为金叉（短期EMA高于长期EMA）
+         * 即使价格暂时低于EMA20（回调），金叉依然表明中期趋势偏多
+         */
+        public boolean isBullishCross() {
+            return emaShort > emaLong;
+        }
         
         /**
          * 获取趋势强度 (0-100)
