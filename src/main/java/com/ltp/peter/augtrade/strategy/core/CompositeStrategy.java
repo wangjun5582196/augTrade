@@ -765,29 +765,31 @@ public class CompositeStrategy implements Strategy {
             
             // 2. 成交量突破评分 (权重: 5分) - 🔥 P1优化：改用当前K线方向判断
             if (volumeBreakoutCalculator != null) {
-                VolumeBreakoutCalculator.VolumeBreakoutResult volume = 
+                VolumeBreakoutCalculator.VolumeBreakoutResult volume =
                         volumeBreakoutCalculator.calculate(context.getKlines());
-                if (volume != null && volume.isBreakout()) {
-                    // 🔥 P1优化-20260310: 使用当前K线方向判断（更实时）
-                    Kline currentKline = context.getKlines().get(0);
-                    BigDecimal klineChange = currentKline.getClosePrice().subtract(currentKline.getOpenPrice());
-                    
-                    if (klineChange.compareTo(BigDecimal.ZERO) > 0) {
-                        buyScore += 5;
-                        bullishCount++;  // 🔥 P2: 统计看涨指标
-                        buyReasons.add(String.format("放量阳线(5分,比率%.2f)", volume.getVolumeRatio()));
-                        log.info("[{}] 📊 成交量突破: 放量阳线 (比率={}, K线涨幅={})",
-                                STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
-                    } else if (klineChange.compareTo(BigDecimal.ZERO) < 0) {
-                        sellScore += 5;
-                        bearishCount++;  // 🔥 P2: 统计看跌指标
-                        sellReasons.add(String.format("放量阴线(5分,比率%.2f)", volume.getVolumeRatio()));
-                        log.info("[{}] 📊 成交量突破: 放量阴线 (比率={}, K线跌幅={})",
-                                STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
-                    }
-                    
-                    // 将成交量数据存入context
+                if (volume != null) {
+                    // 🔥 P0修复-20260316: 无论是否突破都存入context，确保volumeRatio等字段可被保存到DB
                     context.addIndicator("VolumeBreakout", volume);
+
+                    if (volume.isBreakout()) {
+                        // 🔥 P1优化-20260310: 使用当前K线方向判断（更实时）
+                        Kline currentKline = context.getKlines().get(0);
+                        BigDecimal klineChange = currentKline.getClosePrice().subtract(currentKline.getOpenPrice());
+
+                        if (klineChange.compareTo(BigDecimal.ZERO) > 0) {
+                            buyScore += 5;
+                            bullishCount++;  // 🔥 P2: 统计看涨指标
+                            buyReasons.add(String.format("放量阳线(5分,比率%.2f)", volume.getVolumeRatio()));
+                            log.info("[{}] 📊 成交量突破: 放量阳线 (比率={}, K线涨幅={})",
+                                    STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
+                        } else if (klineChange.compareTo(BigDecimal.ZERO) < 0) {
+                            sellScore += 5;
+                            bearishCount++;  // 🔥 P2: 统计看跌指标
+                            sellReasons.add(String.format("放量阴线(5分,比率%.2f)", volume.getVolumeRatio()));
+                            log.info("[{}] 📊 成交量突破: 放量阴线 (比率={}, K线跌幅={})",
+                                    STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
+                        }
+                    }
                 }
             }
             
@@ -962,6 +964,8 @@ public class CompositeStrategy implements Strategy {
             VolumeBreakoutCalculator.VolumeBreakoutResult volume = context.getIndicator("VolumeBreakout");
             if (volume != null) {
                 builder.volumeRatio(volume.getVolumeRatio());
+                builder.currentVolume(volume.getCurrentVolume());
+                builder.avgVolume(volume.getAvgVolume());
             }
             
             // 3. 填充摆动点指标数据

@@ -72,8 +72,75 @@ public class StrategyOrchestrator {
     private OBVCalculator obvCalculator;
     
     /**
+     * 🔥 P0修复-20260316: 信号+上下文联合结果
+     *
+     * 解决问题：之前 TradingScheduler 分别调用 getMarketContext(100根) 和 generateSignal(200根)，
+     * 导致保存到DB的指标值与实际决策使用的不一致
+     */
+    @lombok.Data
+    @lombok.AllArgsConstructor
+    public static class SignalResult {
+        private TradingSignal signal;
+        private MarketContext context;
+    }
+
+    /**
+     * 🔥 P0修复-20260316: 一次性生成信号并返回配套的MarketContext
+     *
+     * 确保 signal 和 context 使用完全相同的数据集，避免指标值不一致
+     */
+    public SignalResult generateSignalWithContext(String symbol) {
+        return generateSignalWithContext(symbol, 200);
+    }
+
+    /**
+     * 🔥 P0修复-20260316: 一次性生成信号并返回配套的MarketContext
+     */
+    public SignalResult generateSignalWithContext(String symbol, int klineCount) {
+        log.info("[StrategyOrchestrator] 开始为 {} 生成交易信号（含上下文）", symbol);
+
+        try {
+            List<Kline> klines = marketDataService.getLatestKlines(symbol, "5m", klineCount);
+
+            if (klines == null || klines.isEmpty()) {
+                log.warn("[StrategyOrchestrator] 无法获取 {} 的K线数据", symbol);
+                return new SignalResult(createErrorSignal(symbol, "无K线数据"), null);
+            }
+
+            if (!validateKlineQuality(klines)) {
+                log.error("[StrategyOrchestrator] ❌ K线数据质量不合格，拒绝生成信号");
+                return new SignalResult(createErrorSignal(symbol, "K线数据质量不合格"), null);
+            }
+
+            BigDecimal currentPrice = klines.get(0).getClosePrice();
+            MarketContext context = MarketContext.builder()
+                    .symbol(symbol)
+                    .klines(klines)
+                    .currentPrice(currentPrice)
+                    .timestamp(System.currentTimeMillis())
+                    .build();
+
+            calculateAllIndicators(context);
+            TradingSignal signal = compositeStrategy.generateSignal(context);
+
+            if (signal == null) {
+                signal = createErrorSignal(symbol, "策略返回空信号");
+            } else {
+                log.info("[StrategyOrchestrator] 生成信号: {} - {} (强度: {}, 得分: {})",
+                        signal.getType(), signal.getReason(), signal.getStrength(), signal.getScore());
+            }
+
+            return new SignalResult(signal, context);
+
+        } catch (Exception e) {
+            log.error("[StrategyOrchestrator] 生成交易信号时发生错误", e);
+            return new SignalResult(createErrorSignal(symbol, "系统异常: " + e.getMessage()), null);
+        }
+    }
+
+    /**
      * 生成交易信号（主入口）
-     * 
+     *
      * @param symbol 交易品种
      * @return 交易信号
      */

@@ -478,11 +478,10 @@ public class TradingScheduler {
             log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
             
             if (paperTrading) {
-                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                        strategyOrchestrator.getMarketContext(binanceFuturesSymbol, 100);
-                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
-                        strategyOrchestrator.generateSignal(binanceFuturesSymbol);
-                
+                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
+                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
+                        strategyOrchestrator.generateSignalWithContext(binanceFuturesSymbol);
+
                 PaperPosition position = paperTradingService.openPosition(
                         binanceFuturesSymbol,
                         "LONG",
@@ -491,10 +490,10 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "BinanceFutures",
-                        signal,
-                        context
+                        result.getSignal(),
+                        result.getContext()
                 );
-                
+
                 if (position != null) {
                     log.info("✅ 币安模拟做多成功 - 持仓ID: {}", position.getPositionId());
                     return true;
@@ -504,7 +503,7 @@ public class TradingScheduler {
                 log.warn("⚠️ 币安实盘交易需要额外配置，当前仅支持模拟交易");
                 return false;
             }
-                    
+
         } catch (Exception e) {
             log.error("❌ 币安做多失败", e);
             return false;
@@ -547,11 +546,10 @@ public class TradingScheduler {
             log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
             
             if (paperTrading) {
-                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                        strategyOrchestrator.getMarketContext(binanceFuturesSymbol, 100);
-                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
-                        strategyOrchestrator.generateSignal(binanceFuturesSymbol);
-                
+                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
+                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
+                        strategyOrchestrator.generateSignalWithContext(binanceFuturesSymbol);
+
                 PaperPosition position = paperTradingService.openPosition(
                         binanceFuturesSymbol,
                         "SHORT",
@@ -560,10 +558,10 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "BinanceFutures",
-                        signal,
-                        context
+                        result.getSignal(),
+                        result.getContext()
                 );
-                
+
                 if (position != null) {
                     log.info("✅ 币安模拟做空成功 - 持仓ID: {}", position.getPositionId());
                     return true;
@@ -573,7 +571,7 @@ public class TradingScheduler {
                 log.warn("⚠️ 币安实盘交易需要额外配置，当前仅支持模拟交易");
                 return false;
             }
-                    
+
         } catch (Exception e) {
             log.error("❌ 币安做空失败", e);
             return false;
@@ -986,12 +984,10 @@ public class TradingScheduler {
             
             if (paperTrading) {
                 // 🎯 模拟交易模式 - 开仓并持有
-                // 🔥 获取市场上下文用于保存指标
-                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                        strategyOrchestrator.getMarketContext(bybitSymbol, 100);
-                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
-                        strategyOrchestrator.generateSignal(bybitSymbol);
-                
+                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
+                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
+                        strategyOrchestrator.generateSignalWithContext(bybitSymbol);
+
                 PaperPosition position = paperTradingService.openPosition(
                         bybitSymbol,
                         "LONG",
@@ -1000,8 +996,8 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "AggressiveML",
-                        signal,    // 🔥 传递信号
-                        context    // 🔥 传递上下文
+                        result.getSignal(),
+                        result.getContext()
                 );
                 
                 // 🔥 修复：检查是否成功开仓
@@ -1079,12 +1075,10 @@ public class TradingScheduler {
             
             if (paperTrading) {
                 // 🎯 模拟交易模式 - 开仓并持有
-                // 🔥 获取市场上下文用于保存指标
-                com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                        strategyOrchestrator.getMarketContext(bybitSymbol, 100);
-                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal = 
-                        strategyOrchestrator.generateSignal(bybitSymbol);
-                
+                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
+                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
+                        strategyOrchestrator.generateSignalWithContext(bybitSymbol);
+
                 PaperPosition position = paperTradingService.openPosition(
                         bybitSymbol,
                         "SHORT",
@@ -1093,8 +1087,8 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "AggressiveML",
-                        signal,    // 🔥 传递信号
-                        context    // 🔥 传递上下文
+                        result.getSignal(),
+                        result.getContext()
                 );
                 
                 // 🔥 修复：检查是否成功开仓
