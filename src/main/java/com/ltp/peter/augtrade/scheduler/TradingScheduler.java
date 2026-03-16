@@ -215,16 +215,84 @@ public class TradingScheduler {
     }
     
     /**
-     * 🔥 新增：采集币安黄金K线数据
+     * 🔥 P0修复-20260316：采集币安黄金K线数据（从API获取真实OHLCV）
+     *
+     * 之前的实现只获取当前价格，导致OHLC全部相同、volume=0，
+     * 被 validateKlineQuality 判定为无效数据，一整天无法开单。
+     * 现在改为从币安合约API获取最新的真实5分钟K线。
      */
     private void collectBinanceData() {
         try {
             log.debug("从币安获取黄金K线数据: {}", binanceFuturesSymbol);
-            
-            // 从币安获取最新价格（简化处理，实际应获取K线）
+
+            // 从币安合约API获取最新1根真实K线
+            String url = String.format(
+                "https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=5m&limit=1",
+                binanceFuturesSymbol
+            );
+
+            okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .build();
+
+            okhttp3.Request request = new okhttp3.Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+
+            try (okhttp3.Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    log.error("币安K线API请求失败: HTTP {}", response.code());
+                    // 降级：用价格快照
+                    collectBinanceDataFallback();
+                    return;
+                }
+
+                String responseBody = response.body().string();
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode list = mapper.readTree(responseBody);
+
+                if (!list.isArray() || list.size() == 0) {
+                    log.warn("币安K线API返回空数据");
+                    collectBinanceDataFallback();
+                    return;
+                }
+
+                // 解析K线: [开盘时间, 开盘价, 最高价, 最低价, 收盘价, 成交量, 收盘时间, 成交额, ...]
+                com.fasterxml.jackson.databind.JsonNode item = list.get(0);
+                long timestamp = item.get(0).asLong();
+
+                Kline kline = new Kline();
+                kline.setSymbol(binanceFuturesSymbol);
+                kline.setInterval("5m");
+                kline.setTimestamp(LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochMilli(timestamp), java.time.ZoneId.systemDefault()));
+                kline.setOpenPrice(new BigDecimal(item.get(1).asText()));
+                kline.setHighPrice(new BigDecimal(item.get(2).asText()));
+                kline.setLowPrice(new BigDecimal(item.get(3).asText()));
+                kline.setClosePrice(new BigDecimal(item.get(4).asText()));
+                kline.setVolume(new BigDecimal(item.get(5).asText()));
+                kline.setCreateTime(LocalDateTime.now());
+                kline.setUpdateTime(LocalDateTime.now());
+
+                marketDataService.saveKline(kline);
+                log.info("✅ 币安黄金K线保存成功: O={} H={} L={} C={} V={}",
+                        kline.getOpenPrice(), kline.getHighPrice(),
+                        kline.getLowPrice(), kline.getClosePrice(), kline.getVolume());
+            }
+        } catch (Exception e) {
+            log.error("币安K线数据采集失败，尝试降级", e);
+            collectBinanceDataFallback();
+        }
+    }
+
+    /**
+     * 降级方案：当K线API不可用时，用当前价格作为快照
+     */
+    private void collectBinanceDataFallback() {
+        try {
             BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
-            
-            // 保存K线数据
             Kline kline = new Kline();
             kline.setSymbol(binanceFuturesSymbol);
             kline.setInterval("5m");
@@ -236,11 +304,10 @@ public class TradingScheduler {
             kline.setVolume(BigDecimal.ZERO);
             kline.setCreateTime(LocalDateTime.now());
             kline.setUpdateTime(LocalDateTime.now());
-            
             marketDataService.saveKline(kline);
-            log.info("✅ 币安黄金K线保存成功: 价格={}", kline.getClosePrice());
+            log.warn("⚠️ 降级：使用价格快照保存K线: {}", currentPrice);
         } catch (Exception e) {
-            log.error("币安数据采集失败", e);
+            log.error("降级方案也失败", e);
         }
     }
     

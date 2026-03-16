@@ -388,44 +388,44 @@ public class StrategyOrchestrator {
     }
     
     /**
-     * 🔥 P0新增-20260316: K线数据质量校验
+     * 🔥 P0修复-20260316: K线数据质量校验
      *
      * 检查最近的K线是否存在质量问题：
-     * - volume=0 的K线（数据源故障）
-     * - flat candle（OHLC完全相同，表示无真实交易数据）
+     * - 同时满足 volume=0 且 flat candle（OHLC完全相同）才算无效
+     *   （单独的volume=0或flat candle在流动性低的品种上是正常现象）
      *
-     * 如果最近20根K线中有3根以上无效，拒绝交易
+     * 只检查最近5根K线（最近25分钟），避免历史遗留的坏数据误拦截
+     * 如果最近5根全部无效才拒绝交易（说明数据源真的有故障）
      */
     private boolean validateKlineQuality(List<Kline> klines) {
-        int checkCount = Math.min(20, klines.size());
+        int checkCount = Math.min(5, klines.size());
         int invalidCount = 0;
 
         for (int i = 0; i < checkCount; i++) {
             Kline kline = klines.get(i);
 
-            // 检查volume=0
+            // 同时满足volume=0和flat candle才算真正无效
             boolean zeroVolume = kline.getVolume() != null
                     && kline.getVolume().compareTo(BigDecimal.ZERO) == 0;
 
-            // 检查flat candle（OHLC完全相同）
             boolean flatCandle = kline.getOpenPrice().compareTo(kline.getHighPrice()) == 0
                     && kline.getHighPrice().compareTo(kline.getLowPrice()) == 0
                     && kline.getLowPrice().compareTo(kline.getClosePrice()) == 0;
 
-            if (zeroVolume || flatCandle) {
+            if (zeroVolume && flatCandle) {
                 invalidCount++;
             }
         }
 
         if (invalidCount > 0) {
-            log.warn("[StrategyOrchestrator] ⚠️ K线质量: 最近{}根中有{}根无效（volume=0或flat candle）",
+            log.warn("[StrategyOrchestrator] ⚠️ K线质量: 最近{}根中有{}根无效（volume=0且flat candle）",
                     checkCount, invalidCount);
         }
 
-        // 最近20根中有3根以上无效，拒绝交易
-        if (invalidCount >= 3) {
-            log.error("[StrategyOrchestrator] ❌ 无效K线过多（{}/{}），数据源可能故障",
-                    invalidCount, checkCount);
+        // 最近5根全部无效才拒绝（数据源真的有故障）
+        if (invalidCount >= checkCount) {
+            log.error("[StrategyOrchestrator] ❌ 最近{}根K线全部无效，数据源可能故障",
+                    checkCount);
             return false;
         }
 
