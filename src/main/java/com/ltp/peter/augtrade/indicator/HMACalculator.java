@@ -60,17 +60,20 @@ public class HMACalculator {
             BigDecimal rawHMA = wmaHalf.multiply(BigDecimal.valueOf(2)).subtract(wmaFull);
             
             // 构建用于最终WMA计算的临时序列
+            // 需要 sqrtPeriod+1 个元素：前 sqrtPeriod 个用于计算当前HMA，
+            // subList(1, sqrtPeriod+1) 的 sqrtPeriod 个用于计算 prevHMA（计算斜率用）
             List<BigDecimal> hmaSeriesList = new ArrayList<>();
-            for (int i = 0; i < sqrtPeriod && i + period < klines.size(); i++) {
+            for (int i = 0; i < sqrtPeriod + 1 && i + period < klines.size(); i++) {
                 BigDecimal wh = calculateWMA(klines, halfPeriod, i);
                 BigDecimal wf = calculateWMA(klines, period, i);
                 if (wh != null && wf != null) {
                     hmaSeriesList.add(wh.multiply(BigDecimal.valueOf(2)).subtract(wf));
                 }
             }
-            
-            // 计算最终的HMA = WMA(rawHMA序列, sqrt(n))
-            BigDecimal hma20 = calculateWMAFromList(hmaSeriesList, sqrtPeriod);
+
+            // 计算最终的HMA = WMA(rawHMA序列前sqrtPeriod个元素, sqrt(n))
+            BigDecimal hma20 = calculateWMAFromList(
+                    hmaSeriesList.subList(0, Math.min(sqrtPeriod, hmaSeriesList.size())), sqrtPeriod);
             
             if (hma20 == null) {
                 return null;
@@ -80,8 +83,10 @@ public class HMACalculator {
             double slope = 0.0;
             String trend = "SIDEWAYS";
             
-            if (hmaSeriesList.size() >= 2) {
-                BigDecimal prevHMA = calculateWMAFromList(hmaSeriesList.subList(1, hmaSeriesList.size()), sqrtPeriod);
+            // prevHMA 用 index 1 开始的 sqrtPeriod 个元素计算（需要 hmaSeriesList.size() >= sqrtPeriod+1）
+            if (hmaSeriesList.size() >= sqrtPeriod + 1) {
+                BigDecimal prevHMA = calculateWMAFromList(
+                        hmaSeriesList.subList(1, sqrtPeriod + 1), sqrtPeriod);
                 if (prevHMA != null) {
                     BigDecimal slopeBD = hma20.subtract(prevHMA);
                     slope = slopeBD.divide(prevHMA, 6, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)).doubleValue();

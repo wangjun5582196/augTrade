@@ -365,13 +365,14 @@ public class TradingScheduler {
         }
 
         // 交易时段过滤：跳过低流动性时段
-        // 黄金活跃时段：伦敦盘(UTC 07:00-16:00) + 纽约盘(UTC 13:00-21:00)
-        // 跳过亚洲夜盘(UTC 22:00-06:00)：点差大、假突破多、流动性差
-//        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
-//        if (utcHour >= 22 || utcHour < 6) {
-//            log.debug("⏰ UTC {}:xx 处于低流动性时段(22:00-06:00)，跳过本轮策略", utcHour);
-//            return;
-//        }
+        // 黄金活跃时段（北京时间）：伦敦盘(15:00-21:00) + 纽约盘(21:00-次日05:00)
+        // 跳过亚洲盘(08:00-14:00 BJT = UTC 00:00-06:00)：黄金横盘为主，假突破多
+        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
+        if (utcHour >= 0 && utcHour < 6) {
+            log.debug("⏰ UTC {}:xx (北京 {}:xx) 处于亚洲低流动性时段，跳过本轮策略",
+                    utcHour, (utcHour + 8) % 24);
+            return;
+        }
 
         // 🔥 优先使用币安（如果启用）
         if (binanceEnabled && binanceFuturesService != null) {
@@ -396,15 +397,16 @@ public class TradingScheduler {
             // 1. 获取当前价格
             BigDecimal currentPrice = binanceFuturesService.getCurrentPrice(binanceFuturesSymbol);
             log.info("当前黄金价格: ${}", currentPrice);
-            
-            // 2. 🔥 使用策略工厂（根据配置自动选择策略）
-            TradingStrategyFactory.Signal strategySignal = strategyFactory.generateSignal(binanceFuturesSymbol);
-            
-            log.info("📊 策略工厂输出: {} - {}", strategySignal, strategyFactory.getStrategyDescription());
-            
-            // 转换为TradingSignal格式
-            com.ltp.peter.augtrade.strategy.signal.TradingSignal tradingSignal = 
-                    convertFactorySignalToTradingSignal(strategySignal, binanceFuturesSymbol);
+
+            // 2. 单次信号生成（修复：原来三重调用导致信号/数据不一致）
+            // generateSignalWithContext 同时返回信号和上下文，供后续执行和数据记录复用
+            com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult signalResult =
+                    strategyOrchestrator.generateSignalWithContext(binanceFuturesSymbol);
+            com.ltp.peter.augtrade.strategy.signal.TradingSignal tradingSignal = signalResult.getSignal();
+
+            log.info("📊 策略输出: {} (强度:{}, 得分:{}) - {}",
+                    tradingSignal.getType(), tradingSignal.getStrength(),
+                    tradingSignal.getScore(), tradingSignal.getReason());
             
             // 3. 检查每日交易次数限制
             LocalDateTime now = LocalDateTime.now();
@@ -474,7 +476,7 @@ public class TradingScheduler {
                 } else {
                     log.info("🔥 收到高质量做多信号（强度{}，市场：{}）！准备做多黄金", 
                             tradingSignal.getStrength(), regime);
-                    boolean success = executeBinanceBuy(currentPrice);
+                    boolean success = executeBinanceBuy(currentPrice, signalResult);
                     if (success) {
                         dailyTradeCount++;
                         lastOpenTime = LocalDateTime.now();
@@ -482,15 +484,16 @@ public class TradingScheduler {
                     }
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
-                int shortRequiredStrength = requiredStrength + 15;
-                
+                // 做空使用与做多相同的强度门槛（原+15惩罚导致做空几乎不可能触发）
+                int shortRequiredStrength = requiredStrength;
+
                 if (tradingSignal.getStrength() < shortRequiredStrength) {
-                    log.info("🚫 做空信号强度{}不足（市场：{}，做空需要≥{}），暂不开空仓", 
+                    log.info("🚫 做空信号强度{}不足（市场：{}，需要≥{}），暂不开空仓",
                             tradingSignal.getStrength(), regime, shortRequiredStrength);
                 } else {
-                    log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
+                    log.warn("⚡ 收到做空信号（强度{}≥{}，市场：{}）！准备做空",
                             tradingSignal.getStrength(), shortRequiredStrength, regime);
-                    boolean success = executeBinanceSell(currentPrice);
+                    boolean success = executeBinanceSell(currentPrice, signalResult);
                     if (success) {
                         dailyTradeCount++;
                         lastOpenTime = LocalDateTime.now();
@@ -512,12 +515,13 @@ public class TradingScheduler {
     /**
      * 🔥 新增：通过币安做多黄金
      */
-    private boolean executeBinanceBuy(BigDecimal currentPrice) {
+    private boolean executeBinanceBuy(BigDecimal currentPrice,
+            com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult signalResult) {
         try {
             // 计算止损止盈
             BigDecimal stopLoss;
             BigDecimal takeProfit;
-            
+
             if ("atr".equalsIgnoreCase(binanceRiskMode)) {
                 java.util.List<Kline> klines = marketDataService.getLatestKlines(binanceFuturesSymbol, "5m", 50);
                 if (klines != null && klines.size() >= 15) {
@@ -525,10 +529,10 @@ public class TradingScheduler {
                         log.warn("⚠️ 市场波动不适合交易，放弃开仓");
                         return false;
                     }
-                    
+
                     stopLoss = atrCalculator.calculateDynamicStopLoss(klines, currentPrice, "LONG", binanceAtrStopLossMultiplier);
                     takeProfit = atrCalculator.calculateDynamicTakeProfit(klines, currentPrice, "LONG", binanceAtrTakeProfitMultiplier);
-                    
+
                     if (stopLoss == null || takeProfit == null) {
                         stopLoss = currentPrice.subtract(new BigDecimal(binanceStopLossDollars));
                         takeProfit = currentPrice.add(new BigDecimal(binanceTakeProfitDollars));
@@ -541,14 +545,11 @@ public class TradingScheduler {
                 stopLoss = currentPrice.subtract(new BigDecimal(binanceStopLossDollars));
                 takeProfit = currentPrice.add(new BigDecimal(binanceTakeProfitDollars));
             }
-            
-            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
-            
-            if (paperTrading) {
-                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
-                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
-                        strategyOrchestrator.generateSignalWithContext(binanceFuturesSymbol);
 
+            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
+
+            if (paperTrading) {
+                // 复用外层已生成的 signal+context，避免重复调用（修复三重信号生成问题）
                 PaperPosition position = paperTradingService.openPosition(
                         binanceFuturesSymbol,
                         "LONG",
@@ -557,8 +558,8 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "BinanceFutures",
-                        result.getSignal(),
-                        result.getContext()
+                        signalResult.getSignal(),
+                        signalResult.getContext()
                 );
 
                 if (position != null) {
@@ -580,12 +581,13 @@ public class TradingScheduler {
     /**
      * 🔥 新增：通过币安做空黄金
      */
-    private boolean executeBinanceSell(BigDecimal currentPrice) {
+    private boolean executeBinanceSell(BigDecimal currentPrice,
+            com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult signalResult) {
         try {
             // 计算止损止盈
             BigDecimal stopLoss;
             BigDecimal takeProfit;
-            
+
             if ("atr".equalsIgnoreCase(binanceRiskMode)) {
                 java.util.List<Kline> klines = marketDataService.getLatestKlines(binanceFuturesSymbol, "5m", 50);
                 if (klines != null && klines.size() >= 15) {
@@ -593,10 +595,10 @@ public class TradingScheduler {
                         log.warn("⚠️ 市场波动不适合交易，放弃开仓");
                         return false;
                     }
-                    
+
                     stopLoss = atrCalculator.calculateDynamicStopLoss(klines, currentPrice, "SHORT", binanceAtrStopLossMultiplier);
                     takeProfit = atrCalculator.calculateDynamicTakeProfit(klines, currentPrice, "SHORT", binanceAtrTakeProfitMultiplier);
-                    
+
                     if (stopLoss == null || takeProfit == null) {
                         stopLoss = currentPrice.add(new BigDecimal(binanceStopLossDollars));
                         takeProfit = currentPrice.subtract(new BigDecimal(binanceTakeProfitDollars));
@@ -609,14 +611,11 @@ public class TradingScheduler {
                 stopLoss = currentPrice.add(new BigDecimal(binanceStopLossDollars));
                 takeProfit = currentPrice.subtract(new BigDecimal(binanceTakeProfitDollars));
             }
-            
-            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
-            
-            if (paperTrading) {
-                // 🔥 P0修复-20260316: 使用 generateSignalWithContext 确保 signal 和 context 使用同一份数据
-                com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator.SignalResult result =
-                        strategyOrchestrator.generateSignalWithContext(binanceFuturesSymbol);
 
+            log.info("📊 止损: ${}, 止盈: ${}", stopLoss, takeProfit);
+
+            if (paperTrading) {
+                // 复用外层已生成的 signal+context，避免重复调用（修复三重信号生成问题）
                 PaperPosition position = paperTradingService.openPosition(
                         binanceFuturesSymbol,
                         "SHORT",
@@ -625,8 +624,8 @@ public class TradingScheduler {
                         stopLoss,
                         takeProfit,
                         "BinanceFutures",
-                        result.getSignal(),
-                        result.getContext()
+                        signalResult.getSignal(),
+                        signalResult.getContext()
                 );
 
                 if (position != null) {
@@ -976,15 +975,14 @@ public class TradingScheduler {
                     }
                 }
             } else if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
-                // 🔥 P0修复：提高做空门槛（而非完全禁用）
-                int shortRequiredStrength = requiredStrength + 15; // 做空需要更高强度
-                
+                // 做空使用与做多相同的强度门槛（原+15惩罚导致做空几乎不可能触发）
+                int shortRequiredStrength = requiredStrength;
+
                 if (tradingSignal.getStrength() < shortRequiredStrength) {
-                    log.info("🚫 做空信号强度{}不足（市场：{}，做空需要≥{}），暂不开空仓", 
+                    log.info("🚫 做空信号强度{}不足（市场：{}，需要≥{}），暂不开空仓",
                             tradingSignal.getStrength(), regime, shortRequiredStrength);
-                    log.info("💡 提示：做空策略已提高门槛（回测做空胜率仅21.4%，需要超强信号）");
                 } else {
-                    log.warn("⚡ 收到超强做空信号（强度{}≥{}，市场：{}）！考虑做空", 
+                    log.warn("⚡ 收到做空信号（强度{}≥{}，市场：{}）！准备做空",
                             tradingSignal.getStrength(), shortRequiredStrength, regime);
                     // 🔥 修复：只在开仓成功时才增加计数器
                     boolean success = executeBybitSell(currentPrice);

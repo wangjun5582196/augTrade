@@ -919,8 +919,285 @@ public class DashboardController {
         return result;
     }
     
+    // ==================== 🔥 大趋势多时间框架分析 ====================
+
+    /**
+     * 获取黄金大趋势分析（多时间框架）
+     * 从币安合约API直接获取1h/4h/1d K线，计算各时间框架的趋势方向
+     */
+    @GetMapping("/macro-trend")
+    public Map<String, Object> getMacroTrend() {
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            String symbol = "XAUUSDT";
+            okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .build();
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+            // 获取三个时间框架的K线
+            List<Map<String, Object>> timeframes = new ArrayList<>();
+            timeframes.add(analyzeSingleTimeframe(client, mapper, symbol, "1h", 50, "1小时"));
+            timeframes.add(analyzeSingleTimeframe(client, mapper, symbol, "4h", 50, "4小时"));
+            timeframes.add(analyzeSingleTimeframe(client, mapper, symbol, "1d", 30, "日线"));
+
+            // 综合判断：各时间框架加权投票
+            // 日线权重3, 4小时权重2, 1小时权重1
+            int[] weights = {1, 2, 3};
+            int bullScore = 0, bearScore = 0;
+            List<String> reasons = new ArrayList<>();
+
+            for (int i = 0; i < timeframes.size(); i++) {
+                Map<String, Object> tf = timeframes.get(i);
+                String dir = (String) tf.get("direction");
+                String label = (String) tf.get("label");
+                int w = weights[i];
+
+                if ("BULLISH".equals(dir)) {
+                    bullScore += w;
+                    reasons.add(label + "看多");
+                } else if ("BEARISH".equals(dir)) {
+                    bearScore += w;
+                    reasons.add(label + "看空");
+                } else {
+                    reasons.add(label + "震荡");
+                }
+            }
+
+            int netScore = bullScore - bearScore;
+            int maxScore = 6; // 1+2+3
+
+            String overallTrend;
+            String overallLabel;
+            String overallEmoji;
+            String overallColor;
+            int overallStrength;
+
+            if (netScore >= 4) {
+                overallTrend = "STRONG_BULL";
+                overallLabel = "强势上涨";
+                overallEmoji = "🚀📈";
+                overallColor = "#10b981";
+                overallStrength = Math.min(100, 60 + netScore * 7);
+            } else if (netScore >= 2) {
+                overallTrend = "BULL";
+                overallLabel = "偏多上涨";
+                overallEmoji = "📈";
+                overallColor = "#6ee7b7";
+                overallStrength = Math.min(80, 40 + netScore * 8);
+            } else if (netScore <= -4) {
+                overallTrend = "STRONG_BEAR";
+                overallLabel = "强势下跌";
+                overallEmoji = "🔻📉";
+                overallColor = "#ef4444";
+                overallStrength = Math.min(100, 60 + Math.abs(netScore) * 7);
+            } else if (netScore <= -2) {
+                overallTrend = "BEAR";
+                overallLabel = "偏空下跌";
+                overallEmoji = "📉";
+                overallColor = "#fca5a5";
+                overallStrength = Math.min(80, 40 + Math.abs(netScore) * 8);
+            } else {
+                overallTrend = "NEUTRAL";
+                overallLabel = "方向不明";
+                overallEmoji = "↔️";
+                overallColor = "#f59e0b";
+                overallStrength = 30;
+            }
+
+            // 综合建议
+            String suggestion;
+            boolean allAligned = (bullScore > 0 && bearScore == 0) || (bearScore > 0 && bullScore == 0);
+            if ("STRONG_BULL".equals(overallTrend)) {
+                suggestion = allAligned ? "多周期共振看多，趋势强劲，回调即机会" : "大方向偏多，但有分歧周期，注意节奏";
+            } else if ("BULL".equals(overallTrend)) {
+                suggestion = "大周期偏多，短线回调不改趋势，顺势为主";
+            } else if ("STRONG_BEAR".equals(overallTrend)) {
+                suggestion = allAligned ? "多周期共振看空，趋势明确，反弹即风险" : "大方向偏空，但有分歧周期，注意反弹";
+            } else if ("BEAR".equals(overallTrend)) {
+                suggestion = "大周期偏空，反弹力度有限，谨慎做多";
+            } else {
+                suggestion = "各时间框架方向不一致，建议等待大周期趋势明朗后再操作";
+            }
+
+            result.put("success", true);
+            result.put("overallTrend", overallTrend);
+            result.put("overallLabel", overallLabel);
+            result.put("overallEmoji", overallEmoji);
+            result.put("overallColor", overallColor);
+            result.put("overallStrength", overallStrength);
+            result.put("suggestion", suggestion);
+            result.put("reasons", reasons);
+            result.put("bullScore", bullScore);
+            result.put("bearScore", bearScore);
+            result.put("netScore", netScore);
+            result.put("timeframes", timeframes);
+            result.put("timestamp", System.currentTimeMillis());
+
+        } catch (Exception e) {
+            log.error("获取大趋势分析失败", e);
+            result.put("success", false);
+            result.put("message", "获取大趋势分析失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    /**
+     * 分析单个时间框架的趋势
+     */
+    private Map<String, Object> analyzeSingleTimeframe(
+            okhttp3.OkHttpClient client,
+            com.fasterxml.jackson.databind.ObjectMapper mapper,
+            String symbol, String interval, int limit, String label) {
+
+        Map<String, Object> tf = new LinkedHashMap<>();
+        tf.put("interval", interval);
+        tf.put("label", label);
+
+        try {
+            String url = String.format(
+                    "https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
+                    symbol, interval, limit);
+
+            okhttp3.Request request = new okhttp3.Request.Builder().url(url).get().build();
+
+            try (okhttp3.Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    tf.put("direction", "UNKNOWN");
+                    tf.put("error", "HTTP " + response.code());
+                    return tf;
+                }
+
+                com.fasterxml.jackson.databind.JsonNode list = mapper.readTree(response.body().string());
+                if (!list.isArray() || list.size() < 20) {
+                    tf.put("direction", "UNKNOWN");
+                    tf.put("error", "数据不足");
+                    return tf;
+                }
+
+                // 按时间正序（API返回已是正序：旧→新）
+                int size = list.size();
+
+                // 提取收盘价数组
+                double[] closes = new double[size];
+                double[] highs = new double[size];
+                double[] lows = new double[size];
+                double latestVolume = 0;
+                for (int i = 0; i < size; i++) {
+                    closes[i] = list.get(i).get(4).asDouble();
+                    highs[i] = list.get(i).get(2).asDouble();
+                    lows[i] = list.get(i).get(3).asDouble();
+                }
+                latestVolume = list.get(size - 1).get(5).asDouble();
+
+                double currentPrice = closes[size - 1];
+
+                // 计算EMA20和EMA50
+                double ema20 = calcEMA(closes, 20);
+                double ema50 = calcEMA(closes, 50);
+
+                // 价格变化
+                double changeFromPrev = size >= 2 ? (closes[size - 1] - closes[size - 2]) : 0;
+                double change5 = size >= 6 ? (closes[size - 1] - closes[size - 6]) : 0;
+                double change10 = size >= 11 ? (closes[size - 1] - closes[size - 11]) : 0;
+                double changePercent5 = size >= 6 && closes[size - 6] > 0
+                        ? (change5 / closes[size - 6]) * 100 : 0;
+
+                // 近期高低点
+                double recentHigh = Double.MIN_VALUE;
+                double recentLow = Double.MAX_VALUE;
+                int lookback = Math.min(20, size);
+                for (int i = size - lookback; i < size; i++) {
+                    if (highs[i] > recentHigh) recentHigh = highs[i];
+                    if (lows[i] < recentLow) recentLow = lows[i];
+                }
+                double priceInRange = recentHigh > recentLow
+                        ? (currentPrice - recentLow) / (recentHigh - recentLow) * 100 : 50;
+
+                // 判断方向
+                String direction;
+                String dirLabel;
+                String dirEmoji;
+                String dirColor;
+
+                boolean emaGolden = ema20 > ema50;
+                boolean priceAboveEma = currentPrice > ema20 && currentPrice > ema50;
+                boolean priceBelowEma = currentPrice < ema20 && currentPrice < ema50;
+
+                if (emaGolden && priceAboveEma && change5 > 0) {
+                    direction = "BULLISH";
+                    dirLabel = "上涨";
+                    dirEmoji = "📈";
+                    dirColor = "#10b981";
+                } else if (!emaGolden && priceBelowEma && change5 < 0) {
+                    direction = "BEARISH";
+                    dirLabel = "下跌";
+                    dirEmoji = "📉";
+                    dirColor = "#ef4444";
+                } else if (emaGolden || priceAboveEma) {
+                    direction = "BULLISH";
+                    dirLabel = "偏多";
+                    dirEmoji = "📈";
+                    dirColor = "#6ee7b7";
+                } else if (!emaGolden || priceBelowEma) {
+                    direction = "BEARISH";
+                    dirLabel = "偏空";
+                    dirEmoji = "📉";
+                    dirColor = "#fca5a5";
+                } else {
+                    direction = "NEUTRAL";
+                    dirLabel = "震荡";
+                    dirEmoji = "↔️";
+                    dirColor = "#f59e0b";
+                }
+
+                tf.put("direction", direction);
+                tf.put("dirLabel", dirLabel);
+                tf.put("dirEmoji", dirEmoji);
+                tf.put("dirColor", dirColor);
+                tf.put("currentPrice", String.format("%.2f", currentPrice));
+                tf.put("ema20", String.format("%.2f", ema20));
+                tf.put("ema50", String.format("%.2f", ema50));
+                tf.put("emaGolden", emaGolden);
+                tf.put("change5", String.format("%.2f", change5));
+                tf.put("changePercent5", String.format("%.2f", changePercent5));
+                tf.put("recentHigh", String.format("%.2f", recentHigh));
+                tf.put("recentLow", String.format("%.2f", recentLow));
+                tf.put("priceInRange", String.format("%.0f", priceInRange));
+            }
+        } catch (Exception e) {
+            log.error("分析{}时间框架失败", label, e);
+            tf.put("direction", "UNKNOWN");
+            tf.put("error", e.getMessage());
+        }
+
+        return tf;
+    }
+
+    /**
+     * 计算EMA（指数移动平均）
+     */
+    private double calcEMA(double[] data, int period) {
+        if (data.length < period) return data[data.length - 1];
+        double multiplier = 2.0 / (period + 1);
+        // 初始SMA
+        double ema = 0;
+        for (int i = 0; i < period; i++) {
+            ema += data[i];
+        }
+        ema /= period;
+        // EMA迭代
+        for (int i = period; i < data.length; i++) {
+            ema = (data[i] - ema) * multiplier + ema;
+        }
+        return ema;
+    }
+
     // ==================== 🔥 Dashboard增强方案 - P0核心API ====================
-    
+
     /**
      * P0-1: 获取当前实时信号监控
      * 展示当前策略信号、市场状态、能否开仓等信息

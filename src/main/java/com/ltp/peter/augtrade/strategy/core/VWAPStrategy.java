@@ -28,7 +28,8 @@ import org.springframework.stereotype.Service;
 public class VWAPStrategy implements Strategy {
 
     private static final String STRATEGY_NAME = "VWAP";
-    private static final int STRATEGY_WEIGHT = 5;
+    // 数据分析显示VWAP参与的组合均亏损（Supertrend+VWAP均亏$43/笔，TrendFilter+VWAP亏$208），禁用投票权重
+    private static final int STRATEGY_WEIGHT = 0;
 
     @Override
     public TradingSignal generateSignal(MarketContext context) {
@@ -182,8 +183,15 @@ public class VWAPStrategy implements Strategy {
     }
 
     @Override
+    public boolean isEnabled() {
+        // 数据驱动决策：VWAP参与的所有组合均亏损，暂停参与投票
+        // 保留Bean以便VWAP偏离数据仍作为其他策略的参考指标
+        return false;
+    }
+
+    @Override
     public String getDescription() {
-        return "VWAP策略 - 基于成交量加权平均价的日内短线核心策略";
+        return "VWAP策略 - 基于成交量加权平均价的日内短线核心策略（已暂停投票，仅提供偏离参考）";
     }
 
     private TradingSignal createHoldSignal(String reason) {

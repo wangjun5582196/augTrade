@@ -232,7 +232,12 @@ public class PaperTradingService {
             
             BigDecimal unrealizedPnL = position.getUnrealizedPnL();
             
-            // ✨ 移动止损逻辑：当盈利超过阈值时触发
+            // 保本止损已移除：$15触发阈值过低，导致止损移到入场价后盈利单被过早平仓
+            // 数据分析：11笔盈利单平均盈利$25，但TP距离平均$18（理论应赚$180）
+            // 根因：$15保本触发后SL移至入场，价格小幅回调即平仓，实际盈利仅$1-3点
+            // 移动止损（$30触发/$10跟踪）已足够保护利润，无需$15保本层
+
+            // ✨ 移动止损逻辑：当盈利超过阈值时触发（$30+）
             if (trailingStopEnabled && unrealizedPnL.compareTo(trailingStopTriggerProfit) > 0) {
                 if ("SHORT".equals(position.getSide())) {
                     updateShortTrailingStop(position, currentPrice, unrealizedPnL);
@@ -597,45 +602,27 @@ public class PaperTradingService {
      * 保存平仓记录到数据库
      */
     private void saveCloseOrder(PaperPosition position, String reason, BigDecimal exitPrice, BigDecimal pnl) {
+        String remarkText;
+        if ("STOP_LOSS".equals(reason)) {
+            remarkText = "止损";
+        } else if ("TAKE_PROFIT".equals(reason)) {
+            remarkText = "止盈";
+        } else {
+            remarkText = "信号反转";
+        }
+
+        // 1. 更新持仓表（优先，防止订单表失败导致持仓无法关闭）
         try {
-            // 1. 更新订单表 - 使用QueryWrapper高效查询
-            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> orderQuery = 
-                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
-            orderQuery.eq("order_no", position.getPositionId());
-            TradeOrder openOrder = tradeOrderMapper.selectOne(orderQuery);
-            
-            if (openOrder != null) {
-                openOrder.setStatus("CLOSED_" + reason);
-                openOrder.setProfitLoss(pnl);
-                
-                String remarkText;
-                if ("STOP_LOSS".equals(reason)) {
-                    remarkText = "止损";
-                } else if ("TAKE_PROFIT".equals(reason)) {
-                    remarkText = "止盈";
-                } else {
-                    remarkText = "信号反转";
-                }
-                
-                openOrder.setRemark(String.format("模拟平仓 - %s - 盈亏: $%.2f", remarkText, pnl.doubleValue()));
-                openOrder.setUpdateTime(LocalDateTime.now());
-                tradeOrderMapper.updateById(openOrder);
-                log.debug("💾 订单表已更新: {}", position.getPositionId());
-            } else {
-                log.warn("⚠️ 未找到订单: {}", position.getPositionId());
-            }
-            
-            // 2. 更新持仓表
-            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<com.ltp.peter.augtrade.entity.Position> posQuery = 
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<com.ltp.peter.augtrade.entity.Position> posQuery =
                     new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
             posQuery.eq("symbol", position.getSymbol())
                     .eq("direction", position.getSide())
                     .eq("status", "OPEN")
                     .orderByDesc("open_time")
                     .last("LIMIT 1");
-            
+
             com.ltp.peter.augtrade.entity.Position positionEntity = positionMapper.selectOne(posQuery);
-            
+
             if (positionEntity != null) {
                 positionEntity.setStatus("CLOSED");
                 positionEntity.setCurrentPrice(exitPrice);
@@ -647,9 +634,29 @@ public class PaperTradingService {
             } else {
                 log.warn("⚠️ 未找到持仓记录: {} - {}", position.getSymbol(), position.getSide());
             }
-            
         } catch (Exception e) {
-            log.error("保存平仓记录失败: {}", e.getMessage(), e);
+            log.error("❌ 更新持仓表失败: {} - {}, 原因: {}", position.getSymbol(), position.getSide(), e.getMessage(), e);
+        }
+
+        // 2. 更新订单表
+        try {
+            com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TradeOrder> orderQuery =
+                    new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+            orderQuery.eq("order_no", position.getPositionId());
+            TradeOrder openOrder = tradeOrderMapper.selectOne(orderQuery);
+
+            if (openOrder != null) {
+                openOrder.setStatus("CLOSED_" + reason);
+                openOrder.setProfitLoss(pnl);
+                openOrder.setRemark(String.format("模拟平仓 - %s - 盈亏: $%.2f", remarkText, pnl.doubleValue()));
+                openOrder.setUpdateTime(LocalDateTime.now());
+                tradeOrderMapper.updateById(openOrder);
+                log.debug("💾 订单表已更新: {}", position.getPositionId());
+            } else {
+                log.warn("⚠️ 未找到订单: {}", position.getPositionId());
+            }
+        } catch (Exception e) {
+            log.error("❌ 更新订单表失败: {}, 原因: {}", position.getPositionId(), e.getMessage(), e);
         }
     }
     

@@ -37,7 +37,7 @@ public class CompositeStrategy implements Strategy {
     
     private static final String STRATEGY_NAME = "Composite";
     private static final int STRATEGY_WEIGHT = 10;
-    private static final int SIGNAL_THRESHOLD = 10; // 修复：从6提高到10，防止单个低权重策略独立触发信号（需至少2个策略共识）
+    private static final int SIGNAL_THRESHOLD = 13; // 修复：从10提高到13，防止TrendFilter(权重12)单独触发信号（12<13，需2策略共识）
     
     @Autowired(required = false)
     private List<Strategy> strategies;
@@ -199,14 +199,50 @@ public class CompositeStrategy implements Strategy {
                             buyScore, sellScore);
                 }
 
-                // HMA趋势过滤器（做多信号检查）
+                // HMA趋势过滤器（做多信号检查）- 冲突时降低强度20%，不再硬拒绝
                 HMACalculator.HMAResult hma = context.getIndicator("HMA");
-                if (hma != null && "DOWN".equals(hma.getTrend())) {
-                    log.warn("[{}] ⚠️ HMA下跌趋势，做多信号被否决 (HMA={}, 斜率={}%)",
+                boolean buyHmaConflict = hma != null && "DOWN".equals(hma.getTrend());
+                if (buyHmaConflict) {
+                    log.warn("[{}] ⚠️ HMA下跌趋势与做多方向冲突，信号强度将降低20% (HMA={}, 斜率={}%)",
                             STRATEGY_NAME, hma.getHma20(), String.format("%.4f", hma.getSlope() * 100));
-                    return createHoldSignal("HMA趋势相反，拒绝做多", buyScore, sellScore);
                 }
-                
+
+                // 🔥 P0新增-20260318: 入场质量过滤器（做多）
+                // 1. Supertrend方向一致性：ST=DOWN时拒绝做多（除非Supertrend策略本身投了多票）
+                SupertrendCalculator.SupertrendResult stBuy = context.getIndicator("Supertrend");
+                if (stBuy != null && stBuy.isDownTrend()) {
+                    boolean supertrendVotedBuy = buyReasons.stream().anyMatch(r -> r.startsWith("Supertrend"));
+                    if (!supertrendVotedBuy) {
+                        log.warn("[{}] 🚫 Supertrend=DOWN与做多矛盾，拒绝入场 (buyScore={}, reasons={})",
+                                STRATEGY_NAME, buyScore, buyReasons);
+                        return createHoldSignal("Supertrend下跌趋势，拒绝做多", buyScore, sellScore);
+                    }
+                }
+
+                // 成交量参考（数据显示缩量时胜率更高，不再作为硬门卫）
+                VolumeBreakoutCalculator.VolumeBreakoutResult volumeBuy = context.getIndicator("VolumeBreakout");
+                if (volumeBuy != null) {
+                    log.debug("[{}] 成交量比率: {}", STRATEGY_NAME, String.format("%.2f", volumeBuy.getVolumeRatio()));
+                }
+
+                // 3. 动量方向检查：momentum5强烈为负时拒绝做多
+                MomentumCalculator.MomentumResult momentumBuy = context.getIndicator("Momentum");
+                if (momentumBuy != null && momentumBuy.getMomentum5() != null
+                        && momentumBuy.getMomentum5().doubleValue() < -10.0) {
+                    log.warn("[{}] 🚫 负动量拒绝做多 (momentum5={})",
+                            STRATEGY_NAME, momentumBuy.getMomentum5());
+                    return createHoldSignal(String.format("负动量(M5=%.2f)，拒绝做多",
+                            momentumBuy.getMomentum5().doubleValue()), buyScore, sellScore);
+                }
+
+                // 4. VWAP偏离参考（不再硬拒绝，>0.5%软衰减30%，>0.8%软衰减50%）
+                VWAPCalculator.VWAPResult vwapBuy = context.getIndicator("VWAP");
+                double vwapDeviationBuy = vwapBuy != null ? vwapBuy.getDeviationPercent() : 0;
+                if (vwapBuy != null && vwapDeviationBuy > 0.8) {
+                    log.warn("[{}] ⚠️ VWAP偏离较大(+{}%)，做多信号将降低50%强度",
+                            STRATEGY_NAME, String.format("%.2f", vwapDeviationBuy));
+                }
+
                 // 🔥 新增-20260309: 填充新指标数据到TradingSignal
                 TradingSignal.TradingSignalBuilder builder = TradingSignal.builder()
                         .type(TradingSignal.SignalType.BUY)
@@ -227,46 +263,51 @@ public class CompositeStrategy implements Strategy {
                 fillNewIndicatorData(builder, context);
                 
                 TradingSignal buySignal = builder.build();
-                
+
+                // HMA冲突时降低信号强度20%
+                if (buyHmaConflict) {
+                    int orig = buySignal.getStrength();
+                    buySignal.setStrength((int)(orig * 0.8));
+                    log.warn("[{}] ⚠️ HMA冲突，做多强度降低20% ({}→{})", STRATEGY_NAME, orig, buySignal.getStrength());
+                }
+
+                // VWAP偏离衰减：0.5~0.8% → 30%降幅；>0.8% → 50%降幅
+                if (vwapBuy != null && vwapDeviationBuy > 0.5) {
+                    int originalStrength = buySignal.getStrength();
+                    double factor = vwapDeviationBuy > 0.8 ? 0.5 : 0.7;
+                    int reducedStrength = (int)(originalStrength * factor);
+                    buySignal.setStrength(reducedStrength);
+                    log.warn("[{}] ⚠️ VWAP偏离+{}%，做多信号强度降低{}% ({}→{})",
+                            STRATEGY_NAME, String.format("%.2f", vwapDeviationBuy),
+                            (int)((1 - factor) * 100), originalStrength, reducedStrength);
+                }
+
                 // 价格位置过滤
                 if (!validatePricePosition(context, buySignal)) {
                     return createHoldSignal("价格位置不合理,做多信号被过滤", buyScore, sellScore);
                 }
-                
+
                 // K线形态检查
                 if (!validateCandlePattern(context, TradingSignal.SignalType.BUY)) {
                     return createHoldSignal("K线形态不支持做多", buyScore, sellScore);
                 }
-                
+
                 Double williamsR = context.getIndicator("WilliamsR");
-                log.info("[{}] 🚀 生成做多信号 - ADX:{}, Williams R:{}, 强度:{}", 
-                        STRATEGY_NAME, String.format("%.2f", adx), 
+                log.info("[{}] 🚀 生成做多信号 - ADX:{}, Williams R:{}, 强度:{}",
+                        STRATEGY_NAME, String.format("%.2f", adx),
                         williamsR != null ? String.format("%.2f", williamsR) : "N/A",
                         buySignal.getStrength());
-                
+
                 return buySignal;
             }
             
             if (sellScore >= SIGNAL_THRESHOLD && sellScore > buyScore) {
                 Double williamsR = context.getIndicator("WilliamsR");
                 
-                // 🔥 P0修复-20260126: 做空严格限制（数据显示做空整体亏损）
-                // 数据：做多+$1,342 vs 做空-$555，差距$1,897
-                // 只在WR -60~-20区间 + 超强信号时做空
+                // Williams %R 仅作参考日志，不再阻止做空
+                // 历史分析：大跌时WR天然 < -60（超卖），原安全区规则反而封死最佳做空时机
                 if (williamsR != null) {
-                    if (williamsR < -60.0) {
-                        log.warn("[{}] 🚫 做空被拒绝：WR={}过于超卖（数据显示做空在超卖时平均亏损）", 
-                                STRATEGY_NAME, String.format("%.2f", williamsR));
-                        return createHoldSignal(String.format("WR=%.2f不适合做空", williamsR), 
-                                buyScore, sellScore);
-                    } else if (williamsR > -20.0) {
-                        log.warn("[{}] 🚫 做空被拒绝：WR={}不够超买（需要-60~-20区间）", 
-                                STRATEGY_NAME, String.format("%.2f", williamsR));
-                        return createHoldSignal(String.format("WR=%.2f做空需在-60~-20区间", williamsR), 
-                                buyScore, sellScore);
-                    }
-                    log.info("[{}] ⚡ WR={}在做空安全区间-60~-20", 
-                            STRATEGY_NAME, String.format("%.2f", williamsR));
+                    log.info("[{}] 📊 做空参考 - WR={}", STRATEGY_NAME, String.format("%.2f", williamsR));
                 }
                 
                 // 🔥 P2修复-20260213: 做空门槛从25降至12（需至少2个策略共识）
@@ -276,11 +317,11 @@ public class CompositeStrategy implements Strategy {
                 //   Supertrend(8) + TrendFilter(12) = 20 ✅
                 //   TrendFilter(12) + VWAP(5) = 17 ✅
                 // 单策略不能触发做空(Supertrend=8<12, VWAP=5<12)，保证安全
-                int shortStrengthThreshold = 12;
+                int shortStrengthThreshold = 13; // 与BUY阈值对齐：TrendFilter(12)单独不能触发做空
                 if (sellScore < shortStrengthThreshold) {
-                    log.warn("[{}] 🚫 做空信号强度{}不足（需要≥{}），做空需要多策略共识", 
+                    log.warn("[{}] 🚫 做空信号强度{}不足（需要≥{}），做空需要多策略共识",
                             STRATEGY_NAME, sellScore, shortStrengthThreshold);
-                    return createHoldSignal(String.format("做空需要多策略共识≥%d分（当前%d分）", shortStrengthThreshold, sellScore), 
+                    return createHoldSignal(String.format("做空需要多策略共识≥%d分（当前%d分）", shortStrengthThreshold, sellScore),
                             buyScore, sellScore);
                 }
                 
@@ -294,14 +335,50 @@ public class CompositeStrategy implements Strategy {
                             buyScore, sellScore);
                 }
 
-                // 🔥 P1优化-20260310: HMA趋势过滤器（做空信号检查）
-                HMACalculator.HMAResult hma = context.getIndicator("HMA");
-                if (hma != null && "UP".equals(hma.getTrend())) {
-                    log.warn("[{}] ⚠️ HMA上涨趋势，做空信号被否决 (HMA={}, 斜率={}%)",
-                            STRATEGY_NAME, hma.getHma20(), String.format("%.4f", hma.getSlope() * 100));
-                    return createHoldSignal("HMA趋势相反，拒绝做空", buyScore, sellScore);
+                // HMA趋势过滤器（做空信号检查）- 冲突时降低强度20%，不再硬拒绝
+                HMACalculator.HMAResult hmaSell = context.getIndicator("HMA");
+                boolean sellHmaConflict = hmaSell != null && "UP".equals(hmaSell.getTrend());
+                if (sellHmaConflict) {
+                    log.warn("[{}] ⚠️ HMA上涨趋势与做空方向冲突，信号强度将降低20% (HMA={}, 斜率={}%)",
+                            STRATEGY_NAME, hmaSell.getHma20(), String.format("%.4f", hmaSell.getSlope() * 100));
                 }
-                
+
+                // 🔥 P0新增-20260318: 入场质量过滤器（做空）
+                // 1. Supertrend方向一致性：ST=UP时拒绝做空（除非Supertrend策略本身投了空票）
+                SupertrendCalculator.SupertrendResult stSell = context.getIndicator("Supertrend");
+                if (stSell != null && stSell.isUpTrend()) {
+                    boolean supertrendVotedSell = sellReasons.stream().anyMatch(r -> r.startsWith("Supertrend"));
+                    if (!supertrendVotedSell) {
+                        log.warn("[{}] 🚫 Supertrend=UP与做空矛盾，拒绝入场 (sellScore={}, reasons={})",
+                                STRATEGY_NAME, sellScore, sellReasons);
+                        return createHoldSignal("Supertrend上涨趋势，拒绝做空", buyScore, sellScore);
+                    }
+                }
+
+                // 成交量参考（不再作为硬门卫）
+                VolumeBreakoutCalculator.VolumeBreakoutResult volumeSell = context.getIndicator("VolumeBreakout");
+                if (volumeSell != null) {
+                    log.debug("[{}] 做空成交量比率: {}", STRATEGY_NAME, String.format("%.2f", volumeSell.getVolumeRatio()));
+                }
+
+                // 3. 动量方向检查：momentum5强烈为正时拒绝做空
+                MomentumCalculator.MomentumResult momentumSell = context.getIndicator("Momentum");
+                if (momentumSell != null && momentumSell.getMomentum5() != null
+                        && momentumSell.getMomentum5().doubleValue() > 10.0) {
+                    log.warn("[{}] 🚫 正动量拒绝做空 (momentum5={})",
+                            STRATEGY_NAME, momentumSell.getMomentum5());
+                    return createHoldSignal(String.format("正动量(M5=%.2f)，拒绝做空",
+                            momentumSell.getMomentum5().doubleValue()), buyScore, sellScore);
+                }
+
+                // 4. VWAP偏离参考（大跌时价格必然低于VWAP，不再硬拒绝）
+                VWAPCalculator.VWAPResult vwapSell = context.getIndicator("VWAP");
+                double vwapDeviationSell = vwapSell != null ? vwapSell.getDeviationPercent() : 0;
+                if (vwapSell != null && vwapDeviationSell < -0.8) {
+                    log.warn("[{}] ⚠️ VWAP偏离较大({}%)，做空信号将降低50%强度",
+                            STRATEGY_NAME, String.format("%.2f", vwapDeviationSell));
+                }
+
                 // 🔥 新增-20260309: 填充新指标数据到TradingSignal
                 TradingSignal.TradingSignalBuilder sellBuilder = TradingSignal.builder()
                         .type(TradingSignal.SignalType.SELL)
@@ -322,22 +399,40 @@ public class CompositeStrategy implements Strategy {
                 fillNewIndicatorData(sellBuilder, context);
                 
                 TradingSignal sellSignal = sellBuilder.build();
-                
+
+                // HMA冲突时降低信号强度20%
+                if (sellHmaConflict) {
+                    int orig = sellSignal.getStrength();
+                    sellSignal.setStrength((int)(orig * 0.8));
+                    log.warn("[{}] ⚠️ HMA冲突，做空强度降低20% ({}→{})", STRATEGY_NAME, orig, sellSignal.getStrength());
+                }
+
+                // VWAP偏离衰减：-0.5~-0.8% → 30%降幅；<-0.8% → 50%降幅
+                if (vwapSell != null && vwapDeviationSell < -0.5) {
+                    int originalStrength = sellSignal.getStrength();
+                    double factor = vwapDeviationSell < -0.8 ? 0.5 : 0.7;
+                    int reducedStrength = (int)(originalStrength * factor);
+                    sellSignal.setStrength(reducedStrength);
+                    log.warn("[{}] ⚠️ VWAP偏离{}%，做空信号强度降低{}% ({}→{})",
+                            STRATEGY_NAME, String.format("%.2f", vwapDeviationSell),
+                            (int)((1 - factor) * 100), originalStrength, reducedStrength);
+                }
+
                 // 价格位置过滤
                 if (!validatePricePosition(context, sellSignal)) {
                     return createHoldSignal("价格位置不合理,做空信号被过滤", buyScore, sellScore);
                 }
-                
+
                 // K线形态检查
                 if (!validateCandlePattern(context, TradingSignal.SignalType.SELL)) {
                     return createHoldSignal("K线形态不支持做空", buyScore, sellScore);
                 }
-                
-                log.info("[{}] 📉 生成做空信号 - ADX:{}, Williams R:{}, 强度:{}", 
-                        STRATEGY_NAME, String.format("%.2f", adx), 
+
+                log.info("[{}] 📉 生成做空信号 - ADX:{}, Williams R:{}, 强度:{}",
+                        STRATEGY_NAME, String.format("%.2f", adx),
                         williamsR != null ? String.format("%.2f", williamsR) : "N/A",
                         sellSignal.getStrength());
-                
+
                 return sellSignal;
             }
             
