@@ -36,6 +36,9 @@ public class WilliamsStrategy implements Strategy {
     private static final double OVERBOUGHT = -30.0;       // 🔥 从-35收紧到-30
     private static final double STRONG_OVERBOUGHT = -15.0; // 🔥 从-20收紧到-15
     
+    // 重构v3：Williams不再参与投票，WR极值判断已内化到 CompositeStrategy Layer3
+    private boolean enabled = false;
+
     @Autowired
     private WilliamsRCalculator williamsCalculator;
     
@@ -146,18 +149,17 @@ public class WilliamsStrategy implements Strategy {
     }
     
     @Override
-    public String getName() {
-        return STRATEGY_NAME;
-    }
-    
+    public String getName() { return STRATEGY_NAME; }
+
     @Override
-    public int getWeight() {
-        return STRATEGY_WEIGHT;
-    }
-    
+    public int getWeight() { return STRATEGY_WEIGHT; }
+
+    @Override
+    public boolean isEnabled() { return enabled; }
+
     @Override
     public String getDescription() {
-        return "Williams %R 动量策略 - 基于超买超卖判断";
+        return "Williams %R — 重构v3已禁用投票，WR极值判断内化至CompositeStrategy Layer3";
     }
     
     /**

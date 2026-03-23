@@ -91,6 +91,24 @@ Real trading is **disabled by default**. To enable, set in `application.yml`:
 
 Risk limits are enforced in `RiskManagementService` regardless of mode.
 
+## Coding Rules
+
+### Java SLF4J Logging — NEVER use format specifiers inside `{}`
+
+SLF4J placeholders are bare `{}` only. Format specifiers like `{:.2f}` or `{:.3f}` are Python/C-style and **silently produce garbage output** in Java (they are NOT errors — the literal text `{:.2f}` gets printed instead of the number).
+
+**Wrong:**
+```java
+log.info("price={:.2f}", price);          // prints "price={:.2f}"
+log.debug("ATR={:.3f}", atrValue);        // prints "ATR={:.3f}"
+```
+
+**Correct — pre-format numbers with `String.format()` before passing as arguments:**
+```java
+log.info("price={}", String.format("%.2f", price));
+log.debug("ATR={}", String.format("%.3f", atrValue));
+```
+
 ### Adding a New Strategy
 
 1. Create a class in `strategy/core/` implementing `Strategy`

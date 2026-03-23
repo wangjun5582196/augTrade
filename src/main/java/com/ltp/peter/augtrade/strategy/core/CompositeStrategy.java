@@ -2,8 +2,6 @@ package com.ltp.peter.augtrade.strategy.core;
 
 import com.ltp.peter.augtrade.entity.Kline;
 import com.ltp.peter.augtrade.indicator.*;
-import com.ltp.peter.augtrade.ml.MLPrediction;
-import com.ltp.peter.augtrade.ml.MLPredictionEnhancedService;
 import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,1095 +15,456 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 组合策略
- * 
- * 整合多个子策略的信号，通过加权投票生成最终交易信号：
- * - 收集所有子策略的信号
- * - 根据策略权重计算做多/做空得分
- * - 得分最高且达到阈值时生成信号
- * 
- * 决策规则：
- * - 做多得分 >= 15 且 > 做空得分：生成做多信号
- * - 做空得分 >= 15 且 > 做多得分：生成做空信号
- * - 其他情况：观望
- * 
+ * 组合策略 — 三层串联入场过滤器
+ *
+ * 重构自原加权投票体系（v2 → v3）。
+ *
+ * 核心逻辑（三层必须全部通过才开仓）：
+ *
+ *   Layer 1 【价格结构】：价格是否在关键支撑/阻力区域？
+ *     → 距支撑或阻力 ≤ 0.35%，否则 HOLD
+ *     → 依赖 KeyLevelCalculator 计算的多层次 S/R 位
+ *
+ *   Layer 2 【趋势方向】：大方向是否一致且足够强？
+ *     → ADX ≥ 30
+ *     → Supertrend 方向 = EMA 方向（两者一致）
+ *     → HMA 不得与方向冲突（HMA 冲突 → 直接 HOLD）
+ *
+ *   Layer 3 【入场触发】：当前是否有低风险入场机会？
+ *     → 做多：WR < -70（超卖确认）+ 无看跌 K 线形态
+ *     → 做空：WR > -30（超买确认）+ 无看涨 K 线形态
+ *
+ *   TP/SL 规则：
+ *     → SL = 关键位 ± 1.5 × ATR（止损在支撑/阻力另一侧）
+ *     → TP = 下一个关键位（确保 TP:SL ≥ 2:1）
+ *     → 不满足 2:1 则降为 HOLD（赔率不够，不值得入场）
+ *
+ * 与 v2 的核心区别：
+ *   - 不再追随动量信号（放量/强动量加分 → 废弃）
+ *   - WR 从投票者变为入场触发器（极值区才有意义）
+ *   - 价格结构前置过滤（不在 S/R 区域 → 不开仓）
+ *
  * @author Peter Wang
  */
 @Slf4j
 @Service
 public class CompositeStrategy implements Strategy {
-    
+
     private static final String STRATEGY_NAME = "Composite";
     private static final int STRATEGY_WEIGHT = 10;
-    private static final int SIGNAL_THRESHOLD = 13; // 修复：从10提高到13，防止TrendFilter(权重12)单独触发信号（12<13，需2策略共识）
-    
+
+    // Layer 2 门槛
+    private static final double ADX_THRESHOLD = 30.0;
+
+    // Layer 3 触发门槛（数据验证：WR极值区胜率83-100%，中性区33-67%）
+    private static final double WR_OVERSOLD_TRIGGER  = -70.0;  // < -70 才允许做多
+    private static final double WR_OVERBOUGHT_TRIGGER = -30.0; // > -30 才允许做空
+
+    // TP:SL 最低赔率要求
+    private static final double MIN_REWARD_RISK_RATIO = 2.0;
+
+    // ATR 止损倍数（SL = 关键位另一侧 1.5×ATR）
+    private static final double SL_ATR_MULTIPLIER = 1.5;
+    // TP 至少 3×ATR（无明确关键位时的兜底）
+    private static final double TP_ATR_MULTIPLIER  = 3.0;
+
     @Autowired(required = false)
-    private List<Strategy> strategies;
-    
+    private List<Strategy> strategies; // 保留注入以兼容 getActiveStrategies() API
+
     @Autowired(required = false)
-    private MLPredictionEnhancedService mlPredictionService;
-    
-    // 🔥 新增-20260309: 4个新指标计算器
-    @Autowired(required = false)
-    private MomentumCalculator momentumCalculator;
-    
-    @Autowired(required = false)
-    private VolumeBreakoutCalculator volumeBreakoutCalculator;
-    
-    @Autowired(required = false)
-    private SwingPointCalculator swingPointCalculator;
-    
+    private ATRCalculator atrCalculator;
+
     @Autowired(required = false)
     private HMACalculator hmaCalculator;
-    
+
+    // ─────────────────────────────────────────────────────────
+    // 主入口
+    // ─────────────────────────────────────────────────────────
+
     @Override
     public TradingSignal generateSignal(MarketContext context) {
         if (context == null || context.getKlines() == null || context.getKlines().isEmpty()) {
-            log.warn("[{}] 市场上下文为空或无K线数据", STRATEGY_NAME);
-            return createHoldSignal("数据不足", 0, 0);
+            return hold("数据不足", 0, 0);
         }
-        
-        if (strategies == null || strategies.isEmpty()) {
-            log.warn("[{}] 没有可用的子策略", STRATEGY_NAME);
-            return createHoldSignal("无子策略", 0, 0);
+
+        List<Kline> klines = context.getKlines();
+        double currentPrice = context.getCurrentPrice().doubleValue();
+
+        // ══════════════════════════════════════════════════════
+        // LAYER 1：价格结构 — 是否在关键 S/R 位附近？
+        // ══════════════════════════════════════════════════════
+
+        KeyLevelCalculator.KeyLevelResult levels = context.getIndicator("KeyLevels");
+        if (levels == null) {
+            return hold("关键位数据缺失，跳过", 0, 0);
         }
-        
-        try {
-            int buyScore = 0;
-            int sellScore = 0;
-            List<String> buyReasons = new ArrayList<>();
-            List<String> sellReasons = new ArrayList<>();
-            
-            // 过滤掉自己，避免递归调用
-            List<Strategy> activeStrategies = strategies.stream()
-                    .filter(s -> !s.getName().equals(STRATEGY_NAME))
-                    .filter(Strategy::isEnabled)
-                    .collect(Collectors.toList());
-            
-            log.debug("[{}] 共有 {} 个活跃策略", STRATEGY_NAME, activeStrategies.size());
-            
-            // 收集所有子策略的信号
-            for (Strategy strategy : activeStrategies) {
-                try {
-                    TradingSignal signal = strategy.generateSignal(context);
-                    
-                    if (signal == null || signal.isHold()) {
-                        log.debug("[{}] {} 策略返回观望信号", STRATEGY_NAME, strategy.getName());
-                        continue;
-                    }
-                    
-                    int weight = strategy.getWeight();
-                    
-                    if (signal.isBuy()) {
-                        buyScore += weight;
-                        buyReasons.add(String.format("%s(权重%d)", strategy.getName(), weight));
-                        log.debug("[{}] {} 策略建议做多，权重: {}", STRATEGY_NAME, strategy.getName(), weight);
-                    } else if (signal.isSell()) {
-                        sellScore += weight;
-                        sellReasons.add(String.format("%s(权重%d)", strategy.getName(), weight));
-                        log.debug("[{}] {} 策略建议做空，权重: {}", STRATEGY_NAME, strategy.getName(), weight);
-                    }
-                    
-                } catch (Exception e) {
-                    log.error("[{}] {} 策略执行失败", STRATEGY_NAME, strategy.getName(), e);
-                }
+
+        boolean atSupport    = levels.isAtSupport();
+        boolean atResistance = levels.isAtResistance();
+
+        if (!atSupport && !atResistance) {
+            log.info("[Composite] Layer1 ❌ 价格不在关键位附近 (距支撑{}%, 距阻力{}%)",
+                    String.format("%.3f", levels.getDistanceToSupportPercent()),
+                    String.format("%.3f", levels.getDistanceToResistancePercent()));
+            return hold(String.format("价格不在关键位(支撑距%.2f%%, 阻力距%.2f%%)",
+                    levels.getDistanceToSupportPercent(), levels.getDistanceToResistancePercent()), 0, 0);
+        }
+
+        log.info("[Composite] Layer1 ✅ 价格在{}区域 (支撑:{}, 阻力:{})",
+                atSupport ? "支撑" : "阻力",
+                levels.getNearestSupport() != null ? String.format("%.2f", levels.getNearestSupport().getPrice()) : "无",
+                levels.getNearestResistance() != null ? String.format("%.2f", levels.getNearestResistance().getPrice()) : "无");
+
+        // ══════════════════════════════════════════════════════
+        // LAYER 2：趋势方向 — ADX + Supertrend + EMA 三者一致
+        // ══════════════════════════════════════════════════════
+
+        Double adx = context.getIndicator("ADX");
+        if (adx == null || adx < ADX_THRESHOLD) {
+            log.info("[Composite] Layer2 ❌ ADX={} < {} 趋势太弱", adx, ADX_THRESHOLD);
+            return hold(String.format("趋势太弱ADX=%.1f(需≥%.0f)", adx != null ? adx : 0, ADX_THRESHOLD), 0, 0);
+        }
+
+        SupertrendCalculator.SupertrendResult st = context.getIndicator("Supertrend");
+        EMACalculator.EMATrend ema = context.getIndicator("EMATrend");
+
+        if (st == null || ema == null) {
+            return hold("Supertrend或EMA数据缺失", 0, 0);
+        }
+
+        // 计算 HMA 趋势（若未在 Orchestrator 计算则在此补算）
+        HMACalculator.HMAResult hma = context.getIndicator("HMA");
+        if (hma == null && hmaCalculator != null) {
+            hma = hmaCalculator.calculate(klines);
+            if (hma != null) context.addIndicator("HMA", hma);
+        }
+
+        boolean trendUp   = st.isUpTrend()   && ema.isUpTrend();
+        boolean trendDown = st.isDownTrend()  && ema.isDownTrend();
+
+        // HMA 冲突 → 直接拒绝（数据：HMA/ST冲突均值亏损 -$88.70/单）
+        if (hma != null && !"FLAT".equals(hma.getTrend())) {
+            boolean hmaUp = "UP".equals(hma.getTrend());
+            if (trendUp && !hmaUp) {
+                log.warn("[Composite] Layer2 ❌ HMA=DOWN 与上涨趋势冲突，拒绝");
+                return hold("HMA下跌与上涨趋势冲突", 0, 0);
             }
-            
-            log.info("[{}] 综合评分 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
-            
-            // 🔥 优化顺序-20260126: 先加权K线形态，再进行ADX过滤
-            Double adx = context.getIndicator("ADX");
-            CandlePattern pattern = context.getIndicator("CandlePattern");
-            
-            // 🔥 Step 1：K线形态加权（实时价格行为优先）
-            if (pattern != null && pattern.hasPattern()) {
-                int patternScore = pattern.getStrength(); // 强度8-10
-                
-                if (pattern.getDirection() == CandlePattern.Direction.BULLISH) {
-                    buyScore += patternScore;
-                    buyReasons.add(String.format("K线形态:%s(强度%d)", 
-                            pattern.getType().name(), patternScore));
-                    log.info("[{}] 🎯 K线看涨形态：{}，权重：{}, 新评分：{}", 
-                            STRATEGY_NAME, pattern.getDescription(), patternScore, buyScore);
-                } else if (pattern.getDirection() == CandlePattern.Direction.BEARISH) {
-                    sellScore += patternScore;
-                    sellReasons.add(String.format("K线形态:%s(强度%d)", 
-                            pattern.getType().name(), patternScore));
-                    log.info("[{}] 🔥 K线看跌形态：{}，权重：{}, 新评分：{}", 
-                            STRATEGY_NAME, pattern.getDescription(), patternScore, sellScore);
-                }
-                
-                log.info("[{}] 📊 K线形态加权后 - 做多: {}, 做空: {}", STRATEGY_NAME, buyScore, sellScore);
+            if (trendDown && hmaUp) {
+                log.warn("[Composite] Layer2 ❌ HMA=UP 与下跌趋势冲突，拒绝");
+                return hold("HMA上涨与下跌趋势冲突", 0, 0);
             }
-            
-            // 🔥 新增-20260309: Step 1.5：新指标加权（优化版方案C）
-            IndicatorScoreResult indicatorScore = calculateNewIndicatorsScore(context);
-            if (indicatorScore != null) {
-                buyScore += indicatorScore.getBuyScore();
-                sellScore += indicatorScore.getSellScore();
-                buyReasons.addAll(indicatorScore.getBuyReasons());
-                sellReasons.addAll(indicatorScore.getSellReasons());
-                
-                log.info("[{}] 📊 新指标加权后 - 做多: {} (+{}), 做空: {} (+{})", 
-                        STRATEGY_NAME, buyScore, indicatorScore.getBuyScore(), 
-                        sellScore, indicatorScore.getSellScore());
+        }
+
+        if (!trendUp && !trendDown) {
+            log.info("[Composite] Layer2 ❌ Supertrend({}) 与 EMA({}) 方向不一致",
+                    st.isUpTrend() ? "UP" : "DOWN", ema.isUpTrend() ? "UP" : "DOWN");
+            return hold(String.format("ST(%s)与EMA(%s)方向不一致",
+                    st.isUpTrend() ? "UP" : "DOWN", ema.isUpTrend() ? "UP" : "DOWN"), 0, 0);
+        }
+
+        log.info("[Composite] Layer2 ✅ 趋势确认 {} (ADX={}, ST={}, EMA={})",
+                trendUp ? "做多" : "做空", String.format("%.1f", adx),
+                st.isUpTrend() ? "UP" : "DOWN", ema.isUpTrend() ? "UP" : "DOWN");
+
+        // ══════════════════════════════════════════════════════
+        // LAYER 3：入场触发 — WR 极值 + K 线形态确认
+        // ══════════════════════════════════════════════════════
+
+        Double wr = context.getIndicator("WilliamsR");
+        CandlePattern pattern = context.getIndicator("CandlePattern");
+
+        // 计算 ATR（用于 TP/SL）
+        double atrValue = computeATR(klines);
+
+        // ── 做多条件：趋势向上 + 价格在支撑区 ──
+        if (trendUp && atSupport) {
+            if (wr == null || wr > WR_OVERSOLD_TRIGGER) {
+                log.info("[Composite] Layer3 ❌ 在支撑区等待WR超卖 WR={}(需<{})",
+                        String.format("%.1f", wr != null ? wr : 0), String.format("%.0f", WR_OVERSOLD_TRIGGER));
+                return hold(String.format("等待WR超卖(WR=%.1f,需<%.0f)", wr != null ? wr : 0, WR_OVERSOLD_TRIGGER), 0, 0);
             }
-            
-            // 🔥 Step 2：ADX过滤（2026-01-28调整）
-            // ⚠️ 重要：历史数据的ADX可能是错误的（用DX而非ADX计算），所以之前的ADX≥30门槛过于严格
-            // 调整策略：
-            // - 正常情况：ADX≥18（真实ADX的合理门槛）
-            // - 强K线形态：ADX≥12（给予更多灵活性）
-            if (adx != null) {
-                // 🎯 K线形态强烈时，降低ADX门槛
-                boolean hasStrongPattern = pattern != null && pattern.getStrength() >= 8;
-                double adxThreshold = hasStrongPattern ? 12.0 : 18.0;
-                
-                if (adx < adxThreshold) {
-                    if (hasStrongPattern) {
-                        log.warn("[{}] ⚠️ 虽有强烈K线形态，但ADX={} < 12（趋势过弱），需观望", 
-                                STRATEGY_NAME, String.format("%.2f", adx));
-                    } else {
-                        log.error("[{}] ❌ ADX过滤！ADX={} < 18（弱趋势/震荡期，避免无效交易）", 
-                                STRATEGY_NAME, String.format("%.2f", adx));
-                    }
-                    log.error("[{}] 📊 当前评分 - 做多:{}, 做空:{} 被拒绝", 
-                            STRATEGY_NAME, buyScore, sellScore);
-                    return createHoldSignal(String.format("❌ ADX=%.2f < %.0f（需要明确趋势）", adx, adxThreshold), 
-                            buyScore, sellScore);
+
+            // 在支撑位出现看跌形态 → 谨慎，等待
+            if (pattern != null && pattern.hasPattern()
+                    && pattern.getDirection() == CandlePattern.Direction.BEARISH
+                    && pattern.getStrength() >= 8) {
+                log.warn("[Composite] Layer3 ❌ 在支撑区出现强烈看跌形态({})，等待", pattern.getType());
+                return hold("支撑区出现看跌形态，等待确认", 0, 0);
+            }
+
+            log.info("[Composite] Layer3 ✅ 做多触发 WR={}, 形态={}", String.format("%.1f", wr),
+                    pattern != null && pattern.hasPattern() ? pattern.getType() : "无");
+
+            return buildSignal(TradingSignal.SignalType.BUY, context, levels, atrValue, wr, adx, pattern, hma, st);
+        }
+
+        // ── 做空条件：趋势向下 + 价格在阻力区 ──
+        if (trendDown && atResistance) {
+            if (wr == null || wr < WR_OVERBOUGHT_TRIGGER) {
+                log.info("[Composite] Layer3 ❌ 在阻力区等待WR超买 WR={}(需>{})",
+                        String.format("%.1f", wr != null ? wr : 0), String.format("%.0f", WR_OVERBOUGHT_TRIGGER));
+                return hold(String.format("等待WR超买(WR=%.1f,需>%.0f)", wr != null ? wr : 0, WR_OVERBOUGHT_TRIGGER), 0, 0);
+            }
+
+            // 在阻力位出现看涨形态 → 谨慎，等待
+            if (pattern != null && pattern.hasPattern()
+                    && pattern.getDirection() == CandlePattern.Direction.BULLISH
+                    && pattern.getStrength() >= 8) {
+                log.warn("[Composite] Layer3 ❌ 在阻力区出现强烈看涨形态({})，等待", pattern.getType());
+                return hold("阻力区出现看涨形态，等待确认", 0, 0);
+            }
+
+            log.info("[Composite] Layer3 ✅ 做空触发 WR={}, 形态={}", String.format("%.1f", wr),
+                    pattern != null && pattern.hasPattern() ? pattern.getType() : "无");
+
+            return buildSignal(TradingSignal.SignalType.SELL, context, levels, atrValue, wr, adx, pattern, hma, st);
+        }
+
+        // 趋势方向与价格位置不匹配（上涨但在阻力区 / 下跌但在支撑区）
+        if (trendUp && atResistance) {
+            return hold("上涨趋势但价格在阻力位，等待突破确认或回调至支撑", 0, 0);
+        }
+        if (trendDown && atSupport) {
+            return hold("下跌趋势但价格在支撑位，等待破位确认或反弹至阻力", 0, 0);
+        }
+
+        return hold("无匹配入场条件", 0, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 生成交易信号（含 TP/SL 计算）
+    // ─────────────────────────────────────────────────────────
+
+    private TradingSignal buildSignal(
+            TradingSignal.SignalType type,
+            MarketContext context,
+            KeyLevelCalculator.KeyLevelResult levels,
+            double atrValue,
+            Double wr,
+            Double adx,
+            CandlePattern pattern,
+            HMACalculator.HMAResult hma,
+            SupertrendCalculator.SupertrendResult st) {
+
+        double currentPrice = context.getCurrentPrice().doubleValue();
+        boolean isBuy = type == TradingSignal.SignalType.BUY;
+
+        // ── 止损计算 ──
+        double slDistance;
+        double slPrice;
+        if (isBuy) {
+            // SL 放在支撑位下方 1.5×ATR
+            double supportPrice = levels.getNearestSupport() != null
+                    ? levels.getNearestSupport().getPrice() : currentPrice;
+            slDistance = (currentPrice - supportPrice) + atrValue * SL_ATR_MULTIPLIER;
+            slPrice    = currentPrice - slDistance;
+        } else {
+            // SL 放在阻力位上方 1.5×ATR
+            double resistancePrice = levels.getNearestResistance() != null
+                    ? levels.getNearestResistance().getPrice() : currentPrice;
+            slDistance = (resistancePrice - currentPrice) + atrValue * SL_ATR_MULTIPLIER;
+            slPrice    = currentPrice + slDistance;
+        }
+        slDistance = Math.max(slDistance, atrValue * 1.0); // 最小 1×ATR 止损
+
+        // ── 止盈计算 ──
+        // 优先用下一个关键位作为 TP，确保赔率 ≥ 2:1
+        double tpPrice;
+        double tpDistance;
+
+        if (isBuy) {
+            // TP 目标：第二阻力位（如果能达到 2:1），否则 3×ATR
+            double nextResistance = levels.getSecondResistance() != null
+                    ? levels.getSecondResistance().getPrice()
+                    : (levels.getNearestResistance() != null ? levels.getNearestResistance().getPrice() : 0);
+
+            if (nextResistance > currentPrice) {
+                tpDistance = nextResistance - currentPrice;
+                if (tpDistance < slDistance * MIN_REWARD_RISK_RATIO) {
+                    // 第二阻力位也不够 2:1，降级用 3×ATR
+                    tpDistance = atrValue * TP_ATR_MULTIPLIER;
                 }
-                
-                log.info("[{}] ✅ 趋势确认(ADX={}≥{}),使用正常阈值(做多:{}, 做空:{})", 
-                        STRATEGY_NAME, String.format("%.2f", adx), 
-                        hasStrongPattern ? "12" : "18", buyScore, sellScore);
             } else {
-                log.warn("[{}] ⚠️ ADX数据缺失，暂停交易以确保安全", STRATEGY_NAME);
-                return createHoldSignal("ADX数据缺失，暂停交易", buyScore, sellScore);
+                tpDistance = atrValue * TP_ATR_MULTIPLIER;
             }
-            
-            // 根据得分生成信号
-            if (buyScore >= SIGNAL_THRESHOLD && buyScore > sellScore) {
-                // TODO: ML震荡过滤器待重新接入（模型需重训以修复强趋势误判问题）
-                // 相关类：MLPredictionEnhancedService，重训后取消此TODO并恢复过滤逻辑
+            tpPrice = currentPrice + tpDistance;
+        } else {
+            // TP 目标：第二支撑位（如果能达到 2:1），否则 3×ATR
+            double nextSupport = levels.getSecondSupport() != null
+                    ? levels.getSecondSupport().getPrice()
+                    : (levels.getNearestSupport() != null ? levels.getNearestSupport().getPrice() : 0);
 
-                // 🔥 P1新增-20260316: 宏观趋势过滤器（做多信号检查）
-                // 当多时间框架显示明确下跌趋势时，拒绝做多（防止在大跌中抄底）
-                String macroTrend = context.getIndicator("MacroTrend");
-                Double macroPriceChange = context.getIndicator("MacroPriceChange");
-                if ("MACRO_DOWN".equals(macroTrend) && macroPriceChange != null && macroPriceChange < -0.5) {
-                    log.warn("[{}] ⚠️ 宏观下跌趋势，做多信号被否决 (5小时变化: {}%)",
-                            STRATEGY_NAME, String.format("%.2f", macroPriceChange));
-                    return createHoldSignal(String.format("宏观下跌趋势(%.2f%%)，拒绝做多", macroPriceChange),
-                            buyScore, sellScore);
+            if (nextSupport > 0 && nextSupport < currentPrice) {
+                tpDistance = currentPrice - nextSupport;
+                if (tpDistance < slDistance * MIN_REWARD_RISK_RATIO) {
+                    tpDistance = atrValue * TP_ATR_MULTIPLIER;
                 }
-
-                // HMA趋势过滤器（做多信号检查）- 冲突时降低强度20%，不再硬拒绝
-                HMACalculator.HMAResult hma = context.getIndicator("HMA");
-                boolean buyHmaConflict = hma != null && "DOWN".equals(hma.getTrend());
-                if (buyHmaConflict) {
-                    log.warn("[{}] ⚠️ HMA下跌趋势与做多方向冲突，信号强度将降低20% (HMA={}, 斜率={}%)",
-                            STRATEGY_NAME, hma.getHma20(), String.format("%.4f", hma.getSlope() * 100));
-                }
-
-                // 🔥 P0新增-20260318: 入场质量过滤器（做多）
-                // 1. Supertrend方向一致性：ST=DOWN时拒绝做多（除非Supertrend策略本身投了多票）
-                SupertrendCalculator.SupertrendResult stBuy = context.getIndicator("Supertrend");
-                if (stBuy != null && stBuy.isDownTrend()) {
-                    boolean supertrendVotedBuy = buyReasons.stream().anyMatch(r -> r.startsWith("Supertrend"));
-                    if (!supertrendVotedBuy) {
-                        log.warn("[{}] 🚫 Supertrend=DOWN与做多矛盾，拒绝入场 (buyScore={}, reasons={})",
-                                STRATEGY_NAME, buyScore, buyReasons);
-                        return createHoldSignal("Supertrend下跌趋势，拒绝做多", buyScore, sellScore);
-                    }
-                }
-
-                // 成交量参考（数据显示缩量时胜率更高，不再作为硬门卫）
-                VolumeBreakoutCalculator.VolumeBreakoutResult volumeBuy = context.getIndicator("VolumeBreakout");
-                if (volumeBuy != null) {
-                    log.debug("[{}] 成交量比率: {}", STRATEGY_NAME, String.format("%.2f", volumeBuy.getVolumeRatio()));
-                }
-
-                // 3. 动量方向检查：momentum5强烈为负时拒绝做多
-                MomentumCalculator.MomentumResult momentumBuy = context.getIndicator("Momentum");
-                if (momentumBuy != null && momentumBuy.getMomentum5() != null
-                        && momentumBuy.getMomentum5().doubleValue() < -10.0) {
-                    log.warn("[{}] 🚫 负动量拒绝做多 (momentum5={})",
-                            STRATEGY_NAME, momentumBuy.getMomentum5());
-                    return createHoldSignal(String.format("负动量(M5=%.2f)，拒绝做多",
-                            momentumBuy.getMomentum5().doubleValue()), buyScore, sellScore);
-                }
-
-                // 4. VWAP偏离参考（不再硬拒绝，>0.5%软衰减30%，>0.8%软衰减50%）
-                VWAPCalculator.VWAPResult vwapBuy = context.getIndicator("VWAP");
-                double vwapDeviationBuy = vwapBuy != null ? vwapBuy.getDeviationPercent() : 0;
-                if (vwapBuy != null && vwapDeviationBuy > 0.8) {
-                    log.warn("[{}] ⚠️ VWAP偏离较大(+{}%)，做多信号将降低50%强度",
-                            STRATEGY_NAME, String.format("%.2f", vwapDeviationBuy));
-                }
-
-                // 🔥 新增-20260309: 填充新指标数据到TradingSignal
-                TradingSignal.TradingSignalBuilder builder = TradingSignal.builder()
-                        .type(TradingSignal.SignalType.BUY)
-                        .strength(calculateSignalStrength(buyScore, sellScore))
-                        .score(buyScore)
-                        .buyScore(buyScore)
-                        .sellScore(sellScore)
-                        .buyReasons(buyReasons)
-                        .sellReasons(sellReasons)
-                        .strategyName(STRATEGY_NAME)
-                        .reason(String.format("综合策略做多 (得分:%d, ADX:%.1f) [%s]", 
-                                buyScore, adx, String.join(", ", buyReasons)))
-                        .symbol(context.getSymbol())
-                        .currentPrice(context.getCurrentPrice())
-                        .signalGenerateTime(LocalDateTime.now());
-                
-                // 填充新指标数据
-                fillNewIndicatorData(builder, context);
-                
-                TradingSignal buySignal = builder.build();
-
-                // HMA冲突时降低信号强度20%
-                if (buyHmaConflict) {
-                    int orig = buySignal.getStrength();
-                    buySignal.setStrength((int)(orig * 0.8));
-                    log.warn("[{}] ⚠️ HMA冲突，做多强度降低20% ({}→{})", STRATEGY_NAME, orig, buySignal.getStrength());
-                }
-
-                // VWAP偏离衰减：0.5~0.8% → 30%降幅；>0.8% → 50%降幅
-                if (vwapBuy != null && vwapDeviationBuy > 0.5) {
-                    int originalStrength = buySignal.getStrength();
-                    double factor = vwapDeviationBuy > 0.8 ? 0.5 : 0.7;
-                    int reducedStrength = (int)(originalStrength * factor);
-                    buySignal.setStrength(reducedStrength);
-                    log.warn("[{}] ⚠️ VWAP偏离+{}%，做多信号强度降低{}% ({}→{})",
-                            STRATEGY_NAME, String.format("%.2f", vwapDeviationBuy),
-                            (int)((1 - factor) * 100), originalStrength, reducedStrength);
-                }
-
-                // 价格位置过滤
-                if (!validatePricePosition(context, buySignal)) {
-                    return createHoldSignal("价格位置不合理,做多信号被过滤", buyScore, sellScore);
-                }
-
-                // K线形态检查
-                if (!validateCandlePattern(context, TradingSignal.SignalType.BUY)) {
-                    return createHoldSignal("K线形态不支持做多", buyScore, sellScore);
-                }
-
-                Double williamsR = context.getIndicator("WilliamsR");
-                log.info("[{}] 🚀 生成做多信号 - ADX:{}, Williams R:{}, 强度:{}",
-                        STRATEGY_NAME, String.format("%.2f", adx),
-                        williamsR != null ? String.format("%.2f", williamsR) : "N/A",
-                        buySignal.getStrength());
-
-                return buySignal;
-            }
-            
-            if (sellScore >= SIGNAL_THRESHOLD && sellScore > buyScore) {
-                Double williamsR = context.getIndicator("WilliamsR");
-                
-                // Williams %R 仅作参考日志，不再阻止做空
-                // 历史分析：大跌时WR天然 < -60（超卖），原安全区规则反而封死最佳做空时机
-                if (williamsR != null) {
-                    log.info("[{}] 📊 做空参考 - WR={}", STRATEGY_NAME, String.format("%.2f", williamsR));
-                }
-                
-                // 🔥 P2修复-20260213: 做空门槛从25降至12（需至少2个策略共识）
-                // 数据分析: ADX≥30+EMA死叉+SELL = 100%胜率, ADX≥40+SELL = 100%胜率
-                // 做空策略得分可能:
-                //   Supertrend(8) + VWAP(5) = 13 ✅
-                //   Supertrend(8) + TrendFilter(12) = 20 ✅
-                //   TrendFilter(12) + VWAP(5) = 17 ✅
-                // 单策略不能触发做空(Supertrend=8<12, VWAP=5<12)，保证安全
-                int shortStrengthThreshold = 13; // 与BUY阈值对齐：TrendFilter(12)单独不能触发做空
-                if (sellScore < shortStrengthThreshold) {
-                    log.warn("[{}] 🚫 做空信号强度{}不足（需要≥{}），做空需要多策略共识",
-                            STRATEGY_NAME, sellScore, shortStrengthThreshold);
-                    return createHoldSignal(String.format("做空需要多策略共识≥%d分（当前%d分）", shortStrengthThreshold, sellScore),
-                            buyScore, sellScore);
-                }
-                
-                // 🔥 P1新增-20260316: 宏观趋势过滤器（做空信号检查）
-                String macroTrendSell = context.getIndicator("MacroTrend");
-                Double macroPriceChangeSell = context.getIndicator("MacroPriceChange");
-                if ("MACRO_UP".equals(macroTrendSell) && macroPriceChangeSell != null && macroPriceChangeSell > 0.5) {
-                    log.warn("[{}] ⚠️ 宏观上涨趋势，做空信号被否决 (5小时变化: +{}%)",
-                            STRATEGY_NAME, String.format("%.2f", macroPriceChangeSell));
-                    return createHoldSignal(String.format("宏观上涨趋势(+%.2f%%)，拒绝做空", macroPriceChangeSell),
-                            buyScore, sellScore);
-                }
-
-                // HMA趋势过滤器（做空信号检查）- 冲突时降低强度20%，不再硬拒绝
-                HMACalculator.HMAResult hmaSell = context.getIndicator("HMA");
-                boolean sellHmaConflict = hmaSell != null && "UP".equals(hmaSell.getTrend());
-                if (sellHmaConflict) {
-                    log.warn("[{}] ⚠️ HMA上涨趋势与做空方向冲突，信号强度将降低20% (HMA={}, 斜率={}%)",
-                            STRATEGY_NAME, hmaSell.getHma20(), String.format("%.4f", hmaSell.getSlope() * 100));
-                }
-
-                // 🔥 P0新增-20260318: 入场质量过滤器（做空）
-                // 1. Supertrend方向一致性：ST=UP时拒绝做空（除非Supertrend策略本身投了空票）
-                SupertrendCalculator.SupertrendResult stSell = context.getIndicator("Supertrend");
-                if (stSell != null && stSell.isUpTrend()) {
-                    boolean supertrendVotedSell = sellReasons.stream().anyMatch(r -> r.startsWith("Supertrend"));
-                    if (!supertrendVotedSell) {
-                        log.warn("[{}] 🚫 Supertrend=UP与做空矛盾，拒绝入场 (sellScore={}, reasons={})",
-                                STRATEGY_NAME, sellScore, sellReasons);
-                        return createHoldSignal("Supertrend上涨趋势，拒绝做空", buyScore, sellScore);
-                    }
-                }
-
-                // 成交量参考（不再作为硬门卫）
-                VolumeBreakoutCalculator.VolumeBreakoutResult volumeSell = context.getIndicator("VolumeBreakout");
-                if (volumeSell != null) {
-                    log.debug("[{}] 做空成交量比率: {}", STRATEGY_NAME, String.format("%.2f", volumeSell.getVolumeRatio()));
-                }
-
-                // 3. 动量方向检查：momentum5强烈为正时拒绝做空
-                MomentumCalculator.MomentumResult momentumSell = context.getIndicator("Momentum");
-                if (momentumSell != null && momentumSell.getMomentum5() != null
-                        && momentumSell.getMomentum5().doubleValue() > 10.0) {
-                    log.warn("[{}] 🚫 正动量拒绝做空 (momentum5={})",
-                            STRATEGY_NAME, momentumSell.getMomentum5());
-                    return createHoldSignal(String.format("正动量(M5=%.2f)，拒绝做空",
-                            momentumSell.getMomentum5().doubleValue()), buyScore, sellScore);
-                }
-
-                // 4. VWAP偏离参考（大跌时价格必然低于VWAP，不再硬拒绝）
-                VWAPCalculator.VWAPResult vwapSell = context.getIndicator("VWAP");
-                double vwapDeviationSell = vwapSell != null ? vwapSell.getDeviationPercent() : 0;
-                if (vwapSell != null && vwapDeviationSell < -0.8) {
-                    log.warn("[{}] ⚠️ VWAP偏离较大({}%)，做空信号将降低50%强度",
-                            STRATEGY_NAME, String.format("%.2f", vwapDeviationSell));
-                }
-
-                // 🔥 新增-20260309: 填充新指标数据到TradingSignal
-                TradingSignal.TradingSignalBuilder sellBuilder = TradingSignal.builder()
-                        .type(TradingSignal.SignalType.SELL)
-                        .strength(calculateSignalStrength(sellScore, buyScore))
-                        .score(sellScore)
-                        .buyScore(buyScore)
-                        .sellScore(sellScore)
-                        .buyReasons(buyReasons)
-                        .sellReasons(sellReasons)
-                        .strategyName(STRATEGY_NAME)
-                        .reason(String.format("综合策略做空 (得分:%d, ADX:%.1f) [%s]", 
-                                sellScore, adx, String.join(", ", sellReasons)))
-                        .symbol(context.getSymbol())
-                        .currentPrice(context.getCurrentPrice())
-                        .signalGenerateTime(LocalDateTime.now());
-                
-                // 填充新指标数据
-                fillNewIndicatorData(sellBuilder, context);
-                
-                TradingSignal sellSignal = sellBuilder.build();
-
-                // HMA冲突时降低信号强度20%
-                if (sellHmaConflict) {
-                    int orig = sellSignal.getStrength();
-                    sellSignal.setStrength((int)(orig * 0.8));
-                    log.warn("[{}] ⚠️ HMA冲突，做空强度降低20% ({}→{})", STRATEGY_NAME, orig, sellSignal.getStrength());
-                }
-
-                // VWAP偏离衰减：-0.5~-0.8% → 30%降幅；<-0.8% → 50%降幅
-                if (vwapSell != null && vwapDeviationSell < -0.5) {
-                    int originalStrength = sellSignal.getStrength();
-                    double factor = vwapDeviationSell < -0.8 ? 0.5 : 0.7;
-                    int reducedStrength = (int)(originalStrength * factor);
-                    sellSignal.setStrength(reducedStrength);
-                    log.warn("[{}] ⚠️ VWAP偏离{}%，做空信号强度降低{}% ({}→{})",
-                            STRATEGY_NAME, String.format("%.2f", vwapDeviationSell),
-                            (int)((1 - factor) * 100), originalStrength, reducedStrength);
-                }
-
-                // 价格位置过滤
-                if (!validatePricePosition(context, sellSignal)) {
-                    return createHoldSignal("价格位置不合理,做空信号被过滤", buyScore, sellScore);
-                }
-
-                // K线形态检查
-                if (!validateCandlePattern(context, TradingSignal.SignalType.SELL)) {
-                    return createHoldSignal("K线形态不支持做空", buyScore, sellScore);
-                }
-
-                log.info("[{}] 📉 生成做空信号 - ADX:{}, Williams R:{}, 强度:{}",
-                        STRATEGY_NAME, String.format("%.2f", adx),
-                        williamsR != null ? String.format("%.2f", williamsR) : "N/A",
-                        sellSignal.getStrength());
-
-                return sellSignal;
-            }
-            
-            // 得分不足或冲突，观望
-            String reason;
-            if (buyScore == 0 && sellScore == 0) {
-                reason = "所有策略均为中性";
-            } else if (buyScore < SIGNAL_THRESHOLD && sellScore < SIGNAL_THRESHOLD) {
-                reason = String.format("信号强度不足 (做多:%d, 做空:%d, 阈值:%d)", 
-                        buyScore, sellScore, SIGNAL_THRESHOLD);
             } else {
-                reason = String.format("信号冲突 (做多:%d, 做空:%d)", buyScore, sellScore);
+                tpDistance = atrValue * TP_ATR_MULTIPLIER;
             }
-            
-            return createHoldSignal(reason, buyScore, sellScore);
-            
-        } catch (Exception e) {
-            log.error("[{}] 生成交易信号时发生错误", STRATEGY_NAME, e);
-            return createHoldSignal("策略执行异常", 0, 0);
+            tpPrice = currentPrice - tpDistance;
         }
+
+        double rrRatio = tpDistance / slDistance;
+
+        // 赔率不足 2:1 → 拒绝入场
+        if (rrRatio < MIN_REWARD_RISK_RATIO) {
+            log.warn("[Composite] ⛔ TP:SL={} < {}，赔率不足，放弃入场 (TP={}, SL={})",
+                    String.format("%.2f", rrRatio), String.format("%.1f", MIN_REWARD_RISK_RATIO),
+                    String.format("%.2f", tpPrice), String.format("%.2f", slPrice));
+            return hold(String.format("赔率TP:SL=%.2f不足%.1f，放弃", rrRatio, MIN_REWARD_RISK_RATIO), 0, 0);
+        }
+
+        // ── 信号强度（简洁版，不再用加权投票）──
+        int strength = computeStrength(adx, wr, isBuy, pattern, st, levels);
+
+        // ── 构建原因说明 ──
+        String nearLevel = isBuy
+                ? (levels.getNearestSupport() != null ? String.format("%.2f", levels.getNearestSupport().getPrice()) : "N/A")
+                : (levels.getNearestResistance() != null ? String.format("%.2f", levels.getNearestResistance().getPrice()) : "N/A");
+        String levelSource = isBuy
+                ? (levels.getNearestSupport() != null ? levels.getNearestSupport().getSource() : "N/A")
+                : (levels.getNearestResistance() != null ? levels.getNearestResistance().getSource() : "N/A");
+
+        String reason = String.format(
+                "%s@%s[%s] WR=%.1f ADX=%.1f TP:SL=%.1f%s",
+                isBuy ? "支撑做多" : "阻力做空",
+                nearLevel, levelSource, wr, adx, rrRatio,
+                pattern != null && pattern.hasPattern() ? " " + pattern.getType().getDescription() : "");
+
+        log.info("[Composite] 📊 生成{}信号 入场:{} SL:{} TP:{} TP:SL={} 强度:{}",
+                isBuy ? "做多" : "做空",
+                String.format("%.2f", currentPrice), String.format("%.2f", slPrice),
+                String.format("%.2f", tpPrice), String.format("%.2f", rrRatio), strength);
+
+        return TradingSignal.builder()
+                .type(type)
+                .strength(strength)
+                .score(strength)
+                .buyScore(isBuy ? strength : 0)
+                .sellScore(isBuy ? 0 : strength)
+                .strategyName(STRATEGY_NAME)
+                .reason(reason)
+                .symbol(context.getSymbol())
+                .currentPrice(context.getCurrentPrice())
+                .suggestedStopLoss(BigDecimal.valueOf(slPrice).setScale(2, RoundingMode.HALF_UP))
+                .suggestedTakeProfit(BigDecimal.valueOf(tpPrice).setScale(2, RoundingMode.HALF_UP))
+                .williamsR(wr)
+                .adx(adx)
+                .supertrendValue(BigDecimal.valueOf(st.getSupertrendValue()))
+                .supertrendDirection(st.isUpTrend() ? "UP" : "DOWN")
+                .signalGenerateTime(LocalDateTime.now())
+                .build();
     }
-    
-    @Override
-    public String getName() {
-        return STRATEGY_NAME;
+
+    // ─────────────────────────────────────────────────────────
+    // 信号强度（基于确认质量）
+    // ─────────────────────────────────────────────────────────
+
+    private int computeStrength(Double adx, Double wr, boolean isBuy,
+                                 CandlePattern pattern,
+                                 SupertrendCalculator.SupertrendResult st,
+                                 KeyLevelCalculator.KeyLevelResult levels) {
+        int score = 50; // 基础分：三层都过了就是 50 起
+
+        // ADX 强度加分
+        if (adx != null) {
+            if (adx >= 50) score += 20;
+            else if (adx >= 40) score += 15;
+            else if (adx >= 30) score += 10;
+        }
+
+        // WR 极值程度加分
+        if (wr != null) {
+            if (isBuy && wr < -85) score += 15;
+            else if (isBuy && wr < -70) score += 8;
+            else if (!isBuy && wr > -15) score += 15;
+            else if (!isBuy && wr > -30) score += 8;
+        }
+
+        // Supertrend 刚翻转加分（最佳入场时机）
+        if (st != null && st.isTrendChanged()) score += 10;
+
+        // 关键位强度加分
+        KeyLevelCalculator.KeyLevel relevantLevel = isBuy
+                ? levels.getNearestSupport() : levels.getNearestResistance();
+        if (relevantLevel != null && relevantLevel.getStrength() == KeyLevelCalculator.LevelStrength.STRONG) {
+            score += 10;
+        }
+
+        // 确认 K 线形态加分
+        if (pattern != null && pattern.hasPattern()) {
+            boolean bullishPattern = pattern.getDirection() == CandlePattern.Direction.BULLISH;
+            if (isBuy && bullishPattern) score += 5;
+            else if (!isBuy && !bullishPattern) score += 5;
+        }
+
+        return Math.min(score, 100);
     }
-    
-    @Override
-    public int getWeight() {
-        return STRATEGY_WEIGHT;
+
+    // ─────────────────────────────────────────────────────────
+    // ATR 计算（14 根 K 线）
+    // ─────────────────────────────────────────────────────────
+
+    private double computeATR(List<Kline> klines) {
+        int period = Math.min(14, klines.size() - 1);
+        if (period < 3) return 10.0; // 兜底默认值
+
+        double atrSum = 0;
+        for (int i = 0; i < period; i++) {
+            Kline cur  = klines.get(i);
+            Kline prev = klines.get(i + 1);
+            double high  = cur.getHighPrice().doubleValue();
+            double low   = cur.getLowPrice().doubleValue();
+            double close = prev.getClosePrice().doubleValue();
+            double tr = Math.max(high - low, Math.max(Math.abs(high - close), Math.abs(low - close)));
+            atrSum += tr;
+        }
+        double atr = atrSum / period;
+        log.debug("[Composite] ATR(14)={}", String.format("%.3f", atr));
+        return atr;
     }
-    
-    @Override
-    public String getDescription() {
-        return "组合策略 - 整合多个子策略信号的加权投票系统";
-    }
-    
-    /**
-     * 计算信号强度
-     * 🔥 P0修复-20260209: 重新校准信号强度计算
-     * 
-     * 问题：原算法 dominantScore * 3 导致信号强度与盈利负相关
-     *   - 信号强度100的订单平均亏$50.5
-     *   - 信号强度24的订单平均赚$118.25
-     * 
-     * 修复：
-     *   - 降低倍数（×3→×2），避免高分策略单独就产生过强信号
-     *   - 降低上限（80→60），让信号强度更加分散
-     *   - 增加得分差距奖励，鼓励多策略一致性
-     */
-    private int calculateSignalStrength(int dominantScore, int oppositeScore) {
-        // 得分差距
-        int scoreDiff = dominantScore - oppositeScore;
-        
-        // 🔥 基础强度降低：从×3改为×2，从80改为60
-        // 这确保单个高权重策略（如TrendFilter=12）不会产生过强信号(12*2=24而非12*3=36)
-        int baseStrength = Math.min(dominantScore * 2, 60);
-        
-        // 🔥 增加一致性奖励：多策略同时给出信号时，额外加分
-        // 得分差距越大说明方向越一致
-        int bonusStrength = Math.min(scoreDiff * 2, 40);
-        
-        return Math.min(baseStrength + bonusStrength, 100);
-    }
-    
-    /**
-     * 创建观望信号
-     */
-    private TradingSignal createHoldSignal(String reason, int buyScore, int sellScore) {
+
+    // ─────────────────────────────────────────────────────────
+    // HOLD 信号
+    // ─────────────────────────────────────────────────────────
+
+    private TradingSignal hold(String reason, int buyScore, int sellScore) {
         return TradingSignal.builder()
                 .type(TradingSignal.SignalType.HOLD)
                 .strength(0)
                 .score(0)
+                .buyScore(buyScore)
+                .sellScore(sellScore)
                 .strategyName(STRATEGY_NAME)
                 .reason(reason)
                 .build();
     }
-    
-    /**
-     * 获取活跃的子策略列表
-     */
+
+    // ─────────────────────────────────────────────────────────
+    // 兼容性 API（供 Controller/API 调用）
+    // ─────────────────────────────────────────────────────────
+
     public List<Strategy> getActiveStrategies() {
-        if (strategies == null) {
-            return new ArrayList<>();
-        }
-        
+        if (strategies == null) return new ArrayList<>();
         return strategies.stream()
                 .filter(s -> !s.getName().equals(STRATEGY_NAME))
                 .filter(Strategy::isEnabled)
                 .collect(Collectors.toList());
     }
-    
-    /**
-     * 获取子策略总权重
-     */
+
     public int getTotalWeight() {
-        return getActiveStrategies().stream()
-                .mapToInt(Strategy::getWeight)
-                .sum();
+        return getActiveStrategies().stream().mapToInt(Strategy::getWeight).sum();
     }
-    
-    /**
-     * 🔥 P1修复-20260213: 验证价格位置是否合理（动态布林带过滤）
-     * 
-     * 问题回顾(20260209): 0%容忍度导致强趋势行情中全天无法开单
-     * - 2月13日黄金价格$4950~4963，布林上轨$4920~4954，价格全天高于上轨
-     * - 布林带基于20根K线(100分钟)计算，严重滞后于突破性上涨
-     * - 策略有做多评分12~19分（远超阈值6分），但全部被价格位置过滤拦截
-     * 
-     * 修复策略：根据ADX和EMA趋势动态调整布林带上轨容忍度
-     * - 强趋势(ADX≥30) + EMA金叉确认: 允许突破上轨1.0%（趋势延续概率高）
-     * - 中等趋势(ADX≥25) + EMA金叉确认: 允许突破上轨0.5%
-     * - 弱趋势/震荡: 保持0%容忍度（原逻辑，防止追高）
-     * 
-     * 核心原则：布林带滞后于趋势 → 用ADX+EMA判断趋势强度 → 动态放宽容忍度
-     */
-    private boolean validatePricePosition(MarketContext context, TradingSignal signal) {
-        if (signal.getType() == TradingSignal.SignalType.HOLD) {
-            return true;
-        }
-        
-        BollingerBands bb = context.getIndicator("BollingerBands");
-        BigDecimal price = context.getCurrentPrice();
-        Double adx = context.getIndicator("ADX");
-        EMACalculator.EMATrend emaTrend = context.getIndicator("EMATrend");
-        
-        // 如果没有布林带,使用EMA判断
-        if (bb == null) {
-            if (emaTrend == null) {
-                log.warn("[{}] 无布林带和EMA数据,跳过价格位置检查", STRATEGY_NAME);
-                return true;
-            }
-            
-            double priceVal = price.doubleValue();
-            double emaShort = emaTrend.getEmaShort();  // 使用emaShort (EMA20)
-            
-            // 🔥 20260213: EMA容忍度也根据ADX动态调整
-            double emaTolerance = calculateEmaTolerance(adx, emaTrend);
-            
-            if (signal.getType() == TradingSignal.SignalType.BUY) {
-                if (priceVal > emaShort * (1 + emaTolerance)) {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{}高于EMA20 {}超过{}%（追高保护）", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), 
-                            String.format("%.2f", emaShort),
-                            String.format("%.1f", emaTolerance * 100));
-                    return false;
-                }
-            } else if (signal.getType() == TradingSignal.SignalType.SELL) {
-                if (priceVal < emaShort * (1 - emaTolerance)) {
-                    log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于EMA20 {}超过{}%", 
-                            STRATEGY_NAME, String.format("%.2f", priceVal), 
-                            String.format("%.2f", emaShort),
-                            String.format("%.1f", emaTolerance * 100));
-                    return false;
-                }
-            }
-            return true;
-        }
-        
-        // 有布林带,根据趋势强度动态检查
-        Double upper = bb.getUpper();
-        Double lower = bb.getLower();
-        Double middle = bb.getMiddle();
-        double priceVal = price.doubleValue();
-        
-        if (signal.getType() == TradingSignal.SignalType.BUY) {
-            // 🔥 P1修复-20260213：动态布林带上轨容忍度
-            double bbTolerance = calculateBBTolerance(adx, emaTrend, true);
-            double adjustedUpper = upper * (1 + bbTolerance);
-            
-            if (priceVal > adjustedUpper) {
-                double exceedsPercent = (priceVal - upper) / upper * 100;
-                if (bbTolerance > 0) {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 调整后上轨{}（原上轨{}, 容忍度{}%, 实际超出{}%）",
-                            STRATEGY_NAME, String.format("%.2f", priceVal),
-                            String.format("%.2f", adjustedUpper),
-                            String.format("%.2f", upper),
-                            String.format("%.1f", bbTolerance * 100),
-                            String.format("%.2f", exceedsPercent));
-                } else {
-                    log.warn("[{}] ⛔ BUY信号被过滤: 价格{} > 布林上轨{}（超出{}%），禁止追高！",
-                            STRATEGY_NAME, String.format("%.2f", priceVal),
-                            String.format("%.2f", upper), String.format("%.2f", exceedsPercent));
-                }
-                return false;
-            }
-            
-            // 如果价格在原始上轨之上但在容忍范围内，记录趋势突破日志
-            if (priceVal > upper && priceVal <= adjustedUpper) {
-                double exceedsPercent = (priceVal - upper) / upper * 100;
-                log.info("[{}] 🔥 趋势突破放行: 价格{} > 原上轨{}（超出{}%），ADX={}, EMA趋势={}，容忍度{}%内放行",
-                        STRATEGY_NAME, String.format("%.2f", priceVal),
-                        String.format("%.2f", upper), String.format("%.2f", exceedsPercent),
-                        adx != null ? String.format("%.1f", adx) : "N/A",
-                        emaTrend != null ? emaTrend.getTrendDescription() : "N/A",
-                        String.format("%.1f", bbTolerance * 100));
-            }
-            
-            // 价格远离中轨时记录警告（仅在布林带内时检查）
-            if (priceVal <= upper) {
-                double distFromMiddle = (priceVal - middle) / (upper - middle);
-                if (distFromMiddle > 0.8) {
-                    log.warn("[{}] ⚠️ BUY信号警告: 价格{}偏近上轨（中轨距离{}%），信号质量降低",
-                            STRATEGY_NAME, String.format("%.2f", priceVal), String.format("%.0f", distFromMiddle * 100));
-                }
-            }
-            
-        } else if (signal.getType() == TradingSignal.SignalType.SELL) {
-            // 做空: 动态布林带下轨容忍度（对称逻辑）
-            double bbTolerance = calculateBBTolerance(adx, emaTrend, false);
-            double adjustedLower = lower * (1 - bbTolerance);
-            
-            if (priceVal < adjustedLower) {
-                double below = lower - priceVal;
-                log.warn("[{}] ⛔ SELL信号被过滤: 价格{}低于调整后下轨{} (-{} USD)", 
-                        STRATEGY_NAME, 
-                        String.format("%.2f", priceVal), 
-                        String.format("%.2f", adjustedLower), 
-                        String.format("%.2f", below));
-                return false;
-            }
-            
-            if (priceVal < lower && priceVal >= adjustedLower) {
-                log.info("[{}] 🔥 趋势突破放行(空): 价格{} < 原下轨{}，ADX={}, 容忍度{}%内放行", 
-                        STRATEGY_NAME, String.format("%.2f", priceVal), 
-                        String.format("%.2f", lower),
-                        adx != null ? String.format("%.1f", adx) : "N/A",
-                        String.format("%.1f", bbTolerance * 100));
-            }
-        }
-        
-        log.debug("[{}] ✅ 价格位置检查通过: 价格{} 在布林带[{}, {}]内（ADX={}, 趋势={}）", 
-                STRATEGY_NAME, 
-                String.format("%.2f", priceVal), 
-                String.format("%.2f", lower), 
-                String.format("%.2f", upper),
-                adx != null ? String.format("%.1f", adx) : "N/A",
-                emaTrend != null ? emaTrend.getTrendDescription() : "N/A");
-        return true;
-    }
-    
-    /**
-     * 🔥 新增-20260213: 计算布林带容忍度
-     * 
-     * 根据ADX强度和EMA趋势方向，动态计算允许突破布林带的百分比
-     * 核心思想：强趋势行情中布林带会滞后，需要给予更多空间
-     * 
-     * @param adx ADX值
-     * @param emaTrend EMA趋势
-     * @param isBuy 是否做多（做多检查上轨，做空检查下轨）
-     * @return 容忍百分比（0.0 = 0%, 0.01 = 1%）
-     */
-    private double calculateBBTolerance(Double adx, EMACalculator.EMATrend emaTrend, boolean isBuy) {
-        if (adx == null) {
-            return 0.0; // 无ADX数据，不放宽
-        }
-        
-        // 检查EMA趋势是否与交易方向一致
-        boolean emaConfirmed = false;
-        if (emaTrend != null) {
-            if (isBuy && emaTrend.isUpTrend()) {
-                emaConfirmed = true; // 做多 + EMA金叉 = 趋势确认
-            } else if (!isBuy && emaTrend.isDownTrend()) {
-                emaConfirmed = true; // 做空 + EMA死叉 = 趋势确认
-            }
-        }
-        
-        if (!emaConfirmed) {
-            // EMA不确认趋势方向，不放宽（保持原始0%容忍度）
-            log.debug("[{}] BB容忍度: 0%（EMA趋势未确认{}方向）", 
-                    STRATEGY_NAME, isBuy ? "做多" : "做空");
-            return 0.0;
-        }
-        
-        // ADX >= 30: 强趋势，布林带滞后严重，容忍1.0%
-        if (adx >= 30) {
-            log.info("[{}] 📈 BB容忍度: 1.0%（强趋势ADX={}, EMA确认{}）", 
-                    STRATEGY_NAME, String.format("%.1f", adx), isBuy ? "上涨" : "下跌");
-            return 0.010;
-        }
-        
-        // ADX >= 25: 中等趋势，容忍0.5%
-        if (adx >= 25) {
-            log.info("[{}] 📊 BB容忍度: 0.5%（中等趋势ADX={}, EMA确认{}）", 
-                    STRATEGY_NAME, String.format("%.1f", adx), isBuy ? "上涨" : "下跌");
-            return 0.005;
-        }
-        
-        // ADX < 25: 弱趋势/震荡，保持严格（0%容忍度）
-        log.debug("[{}] BB容忍度: 0%（弱趋势ADX={}）", STRATEGY_NAME, String.format("%.1f", adx));
-        return 0.0;
-    }
-    
-    /**
-     * 🔥 新增-20260213: 计算EMA容忍度
-     * 当无布林带时使用，逻辑与BB容忍度类似
-     */
-    private double calculateEmaTolerance(Double adx, EMACalculator.EMATrend emaTrend) {
-        // 基础容忍度0.3%
-        double baseTolerance = 0.003;
-        
-        if (adx == null || emaTrend == null) {
-            return baseTolerance;
-        }
-        
-        // 强趋势 + EMA确认: 放宽到0.8%
-        if (adx >= 30 && (emaTrend.isUpTrend() || emaTrend.isDownTrend())) {
-            return 0.008;
-        }
-        
-        // 中等趋势 + EMA确认: 放宽到0.5%
-        if (adx >= 25 && (emaTrend.isUpTrend() || emaTrend.isDownTrend())) {
-            return 0.005;
-        }
-        
-        return baseTolerance;
-    }
-    
-    /**
-     * 🔥 P0修复: 验证K线形态是否支持交易
-     * 
-     * 规则:
-     * - DOJI等不确定形态: 不交易
-     * - 形态方向与信号方向相反: 不交易
-     */
-    private boolean validateCandlePattern(MarketContext context, TradingSignal.SignalType signalType) {
-        CandlePattern pattern = context.getIndicator("CandlePattern");
-        if (pattern == null || !pattern.hasPattern()) {
-            return true; // 无形态,不限制
-        }
-        
-        CandlePattern.Direction pDir = pattern.getDirection();
-        
-        // DOJI等不确定形态: 不交易
-        if (pDir == CandlePattern.Direction.NEUTRAL) {
-            log.warn("[{}] ⏸️ 不确定K线形态{},暂停交易", STRATEGY_NAME, pattern.getType().getDescription());
-            return false;
-        }
-        
-        // 方向相反: 不交易
-        if (signalType == TradingSignal.SignalType.BUY && 
-            pDir == CandlePattern.Direction.BEARISH) {
-            log.warn("[{}] ⛔ BUY信号与看跌形态{}矛盾", STRATEGY_NAME, pattern.getType().getDescription());
-            return false;
-        }
-        
-        if (signalType == TradingSignal.SignalType.SELL && 
-            pDir == CandlePattern.Direction.BULLISH) {
-            log.warn("[{}] ⛔ SELL信号与看涨形态{}矛盾", STRATEGY_NAME, pattern.getType().getDescription());
-            return false;
-        }
-        
-        log.debug("[{}] ✅ K线形态检查通过: {}方向{}", 
-                STRATEGY_NAME, pattern.getType().getDescription(), pDir.getDescription());
-        return true;
-    }
-    
-    /**
-     * 🔥 新增-20260309 + 优化-20260310: 计算新指标评分（优化版方案C + P0/P1/P2优化）
-     * 
-     * 集成4个新指标：动量、成交量突破、摆动点、HMA
-     * 
-     * 🔥 P0修复-20260310:
-     * - 动量增加0.2%阈值
-     * - 摆动点增加时效性检查（15分钟内有效）
-     * - 增加指标冲突检测
-     * 
-     * 🔥 P1优化-20260310:
-     * - 成交量改用当前K线方向判断（更实时）
-     * - 摆动点平衡做多/做空权重（各7分）
-     * - HMA改为过滤器（在主逻辑中使用）
-     * 
-     * 🔥 P2优化-20260310:
-     * - 信号质量分级（A/B/C/D级）
-     * - 一致性奖励
-     * 
-     * 权重分配（优化后）：
-     * - 价格动量(Momentum): 做多/做空各4分（需>0.2%）
-     * - 成交量突破(Volume): 5分（放量+K线方向一致）
-     * - 摆动点(SwingPoint): 做多7分（突破高点）/做空7分（跌破低点）
-     * - HMA趋势: 作为过滤器，不直接评分
-     * - 一致性奖励: 3-5分（3-4个指标一致时）
-     */
-    private IndicatorScoreResult calculateNewIndicatorsScore(MarketContext context) {
-        int buyScore = 0;
-        int sellScore = 0;
-        List<String> buyReasons = new ArrayList<>();
-        List<String> sellReasons = new ArrayList<>();
-        
-        // 🔥 P2优化-20260310: 统计指标方向，用于冲突检测和一致性奖励
-        int bullishCount = 0;   // 看涨指标数量
-        int bearishCount = 0;   // 看跌指标数量
-        
-        try {
-            // 1. 价格动量评分 (权重: 4分) - 🔥 P0优化：已增加0.2%阈值
-            if (momentumCalculator != null) {
-                MomentumCalculator.MomentumResult momentum = momentumCalculator.calculate(context.getKlines());
-                if (momentum != null) {
-                    if (momentum.isStrongUp()) {
-                        buyScore += 4;
-                        bullishCount++;  // 🔥 P2: 统计看涨指标
-                        buyReasons.add(String.format("强劲上涨动量(4分,M2=%.2f%%,M5=%.2f%%)", 
-                                momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
-                        log.info("[{}] 📈 动量指标: 强劲上涨 (M2={} +{}%, M5={} +{}%)",
-                                STRATEGY_NAME, momentum.getMomentum2(),
-                                String.format("%.2f", momentum.getMomentum2Ratio() * 100),
-                                momentum.getMomentum5(),
-                                String.format("%.2f", momentum.getMomentum5Ratio() * 100));
-                    } else if (momentum.isStrongDown()) {
-                        sellScore += 4;
-                        bearishCount++;  // 🔥 P2: 统计看跌指标
-                        sellReasons.add(String.format("强劲下跌动量(4分,M2=%.2f%%,M5=%.2f%%)", 
-                                momentum.getMomentum2Ratio() * 100, momentum.getMomentum5Ratio() * 100));
-                        log.info("[{}] 📉 动量指标: 强劲下跌 (M2={} {}%, M5={} {}%)",
-                                STRATEGY_NAME, momentum.getMomentum2(),
-                                String.format("%.2f", momentum.getMomentum2Ratio() * 100),
-                                momentum.getMomentum5(),
-                                String.format("%.2f", momentum.getMomentum5Ratio() * 100));
-                    }
-                    
-                    // 将动量数据存入context供后续使用
-                    context.addIndicator("Momentum", momentum);
-                }
-            }
-            
-            // 2. 成交量突破评分 (权重: 5分) - 🔥 P1优化：改用当前K线方向判断
-            if (volumeBreakoutCalculator != null) {
-                VolumeBreakoutCalculator.VolumeBreakoutResult volume =
-                        volumeBreakoutCalculator.calculate(context.getKlines());
-                if (volume != null) {
-                    // 🔥 P0修复-20260316: 无论是否突破都存入context，确保volumeRatio等字段可被保存到DB
-                    context.addIndicator("VolumeBreakout", volume);
 
-                    if (volume.isBreakout()) {
-                        // 🔥 P1优化-20260310: 使用当前K线方向判断（更实时）
-                        Kline currentKline = context.getKlines().get(0);
-                        BigDecimal klineChange = currentKline.getClosePrice().subtract(currentKline.getOpenPrice());
+    @Override
+    public String getName() { return STRATEGY_NAME; }
 
-                        if (klineChange.compareTo(BigDecimal.ZERO) > 0) {
-                            buyScore += 5;
-                            bullishCount++;  // 🔥 P2: 统计看涨指标
-                            buyReasons.add(String.format("放量阳线(5分,比率%.2f)", volume.getVolumeRatio()));
-                            log.info("[{}] 📊 成交量突破: 放量阳线 (比率={}, K线涨幅={})",
-                                    STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
-                        } else if (klineChange.compareTo(BigDecimal.ZERO) < 0) {
-                            sellScore += 5;
-                            bearishCount++;  // 🔥 P2: 统计看跌指标
-                            sellReasons.add(String.format("放量阴线(5分,比率%.2f)", volume.getVolumeRatio()));
-                            log.info("[{}] 📊 成交量突破: 放量阴线 (比率={}, K线跌幅={})",
-                                    STRATEGY_NAME, String.format("%.2f", volume.getVolumeRatio()), klineChange);
-                        }
-                    }
-                }
-            }
-            
-            // 3. 摆动点评分 - 🔥 P0优化：时效性检查；P1优化：平衡做多/做空权重
-            if (swingPointCalculator != null) {
-                SwingPointCalculator.SwingPointResult swingPoint = 
-                        swingPointCalculator.calculate(context.getKlines());
-                if (swingPoint != null) {
-                    // 🔥 P0+P1优化：突破摆动高点 = 强烈做多信号（已增加15分钟时效性和0.3%幅度检查）
-                    if (swingPoint.isBreakingHigh()) {
-                        buyScore += 7;
-                        bullishCount++;  // 🔥 P2: 统计看涨指标
-                        buyReasons.add("突破摆动高点(7分)");
-                        log.info("[{}] 🚀 摆动点: 有效突破高点 (高点={})", 
-                                STRATEGY_NAME, 
-                                swingPoint.getLastSwingHigh() != null ? 
-                                        swingPoint.getLastSwingHigh().getPrice() : "N/A");
-                    }
-                    
-                    // 🔥 P1新增-20260310: 跌破摆动低点 = 强烈做空信号（权重平衡）
-                    if (swingPoint.isBreakingLow()) {
-                        sellScore += 7;
-                        bearishCount++;  // 🔥 P2: 统计看跌指标
-                        sellReasons.add("跌破摆动低点(7分)");
-                        log.info("[{}] 📉 摆动点: 有效跌破低点 (低点={})", 
-                                STRATEGY_NAME, 
-                                swingPoint.getLastSwingLow() != null ? 
-                                        swingPoint.getLastSwingLow().getPrice() : "N/A");
-                    }
-                    
-                    // 接近摆动低点支撑（仅记录，不评分）
-                    if (swingPoint.isNearSupport()) {
-                        log.info("[{}] 📍 摆动点: 接近支撑位 (低点={})", 
-                                STRATEGY_NAME, 
-                                swingPoint.getLastSwingLow() != null ? 
-                                        swingPoint.getLastSwingLow().getPrice() : "N/A");
-                    }
-                    
-                    // 将摆动点数据存入context
-                    context.addIndicator("SwingPoint", swingPoint);
-                }
-            }
-            
-            // 4. HMA趋势 - 🔥 P1优化：移除评分，改为在主逻辑中作为过滤器使用
-            if (hmaCalculator != null) {
-                HMACalculator.HMAResult hma = hmaCalculator.calculate(context.getKlines());
-                if (hma != null) {
-                    log.info("[{}] 📐 HMA: 趋势={}, 斜率={}%, 价格{}HMA",
-                            STRATEGY_NAME, hma.getTrend(),
-                            String.format("%.4f", hma.getSlope()),
-                            hma.isPriceAboveHMA() ? "在上方" : "在下方");
-                    
-                    // 🔥 P1优化-20260310: HMA不直接评分，但统计方向用于冲突检测
-                    if ("UP".equals(hma.getTrend()) && hma.isPriceAboveHMA()) {
-                        bullishCount++;  // 统计但不评分
-                    } else if ("DOWN".equals(hma.getTrend()) && !hma.isPriceAboveHMA()) {
-                        bearishCount++;  // 统计但不评分
-                    }
-                    
-                    // 将HMA数据存入context（供主逻辑使用作为过滤器）
-                    context.addIndicator("HMA", hma);
-                }
-            }
-            
-            // 🔥 P0修复-20260310: 指标冲突检测
-            int totalSignals = bullishCount + bearishCount;
-            if (bullishCount > 0 && bearishCount > 0) {
-                log.warn("[{}] ⚠️ 新指标信号冲突: {}个看涨 vs {}个看跌，拒绝评分", 
-                        STRATEGY_NAME, bullishCount, bearishCount);
-                return IndicatorScoreResult.builder()
-                        .buyScore(0)
-                        .sellScore(0)
-                        .buyReasons(List.of("指标方向冲突，拒绝信号"))
-                        .sellReasons(List.of("指标方向冲突，拒绝信号"))
-                        .signalQuality("D")  // D级：冲突信号
-                        .build();
-            }
-            
-            // 🔥 P2优化-20260310: 信号质量分级和一致性奖励
-            String signalQuality = "C";  // 默认C级
-            int consistencyBonus = 0;
-            
-            if (totalSignals >= 4) {
-                // A级：4个指标一致（最高质量）
-                signalQuality = "A";
-                consistencyBonus = 5;
-                if (bullishCount == totalSignals) {
-                    buyScore += consistencyBonus;
-                    buyReasons.add("4指标高度一致(+5分)");
-                    log.info("[{}] 🌟 信号质量A级: 4个指标完全一致(做多)", STRATEGY_NAME);
-                } else {
-                    sellScore += consistencyBonus;
-                    sellReasons.add("4指标高度一致(+5分)");
-                    log.info("[{}] 🌟 信号质量A级: 4个指标完全一致(做空)", STRATEGY_NAME);
-                }
-            } else if (totalSignals == 3) {
-                // B级：3个指标一致（高质量）
-                signalQuality = "B";
-                consistencyBonus = 3;
-                if (bullishCount == 3) {
-                    buyScore += consistencyBonus;
-                    buyReasons.add("3指标一致(+3分)");
-                    log.info("[{}] ⭐ 信号质量B级: 3个指标一致(做多)", STRATEGY_NAME);
-                } else {
-                    sellScore += consistencyBonus;
-                    sellReasons.add("3指标一致(+3分)");
-                    log.info("[{}] ⭐ 信号质量B级: 3个指标一致(做空)", STRATEGY_NAME);
-                }
-            } else if (totalSignals == 2) {
-                // C级：2个指标（中等质量，正常评分）
-                signalQuality = "C";
-                log.info("[{}] 📊 信号质量C级: 2个指标支持", STRATEGY_NAME);
-            } else if (totalSignals == 1) {
-                // C-级：单个指标（较低质量）
-                signalQuality = "C-";
-                log.info("[{}] ⚠️ 信号质量C-级: 仅1个指标支持", STRATEGY_NAME);
-            }
-            
-            return IndicatorScoreResult.builder()
-                    .buyScore(buyScore)
-                    .sellScore(sellScore)
-                    .buyReasons(buyReasons)
-                    .sellReasons(sellReasons)
-                    .signalQuality(signalQuality)
-                    .indicatorCount(totalSignals)
-                    .bullishCount(bullishCount)
-                    .bearishCount(bearishCount)
-                    .build();
-            
-        } catch (Exception e) {
-            log.error("[{}] 计算新指标评分失败", STRATEGY_NAME, e);
-            return null;
-        }
-    }
-    
-    /**
-     * 新指标评分结果
-     * 
-     * 🔥 P2优化-20260310: 增加信号质量等级
-     */
-    @lombok.Data
-    @lombok.Builder
-    private static class IndicatorScoreResult {
-        private int buyScore;           // 做多评分
-        private int sellScore;          // 做空评分
-        private List<String> buyReasons;   // 做多理由
-        private List<String> sellReasons;  // 做空理由
-        private String signalQuality;   // 🔥 P2新增：信号质量(A/B/C/C-/D)
-        private int indicatorCount;     // 🔥 P2新增：有信号的指标总数
-        private int bullishCount;       // 🔥 P2新增：看涨指标数量
-        private int bearishCount;       // 🔥 P2新增：看跌指标数量
-    }
-    
-    /**
-     * 🔥 新增-20260309: 填充新指标数据到TradingSignal
-     * 
-     * 从MarketContext中提取新指标数据并填充到TradingSignal.Builder中
-     * 
-     * @param builder TradingSignal构建器
-     * @param context 市场上下文
-     */
-    private void fillNewIndicatorData(TradingSignal.TradingSignalBuilder builder, MarketContext context) {
-        try {
-            // 1. 填充动量指标数据
-            MomentumCalculator.MomentumResult momentum = context.getIndicator("Momentum");
-            if (momentum != null) {
-                builder.momentum2(momentum.getMomentum2());
-                builder.momentum5(momentum.getMomentum5());
-            }
-            
-            // 2. 填充成交量指标数据
-            VolumeBreakoutCalculator.VolumeBreakoutResult volume = context.getIndicator("VolumeBreakout");
-            if (volume != null) {
-                builder.volumeRatio(volume.getVolumeRatio());
-                builder.currentVolume(volume.getCurrentVolume());
-                builder.avgVolume(volume.getAvgVolume());
-            }
-            
-            // 3. 填充摆动点指标数据
-            SwingPointCalculator.SwingPointResult swingPoint = context.getIndicator("SwingPoint");
-            if (swingPoint != null) {
-                if (swingPoint.getLastSwingHigh() != null) {
-                    builder.lastSwingHigh(swingPoint.getLastSwingHigh().getPrice());
-                }
-                if (swingPoint.getLastSwingLow() != null) {
-                    builder.lastSwingLow(swingPoint.getLastSwingLow().getPrice());
-                }
-                
-                // 价格位置判断
-                BigDecimal currentPrice = context.getCurrentPrice();
-                String pricePosition = "BETWEEN";
-                if (swingPoint.getLastSwingHigh() != null && swingPoint.getLastSwingLow() != null) {
-                    if (currentPrice.compareTo(swingPoint.getLastSwingHigh().getPrice()) > 0) {
-                        pricePosition = "ABOVE_SWING_HIGH";
-                    } else if (currentPrice.compareTo(swingPoint.getLastSwingLow().getPrice()) < 0) {
-                        pricePosition = "BELOW_SWING_LOW";
-                    }
-                }
-                builder.pricePosition(pricePosition);
-            }
-            
-            // 4. 填充HMA指标数据
-            HMACalculator.HMAResult hma = context.getIndicator("HMA");
-            if (hma != null) {
-                builder.hma20(hma.getHma20());
-                builder.hma20Slope(hma.getSlope());
-            }
-            
-            // 5. 趋势确认判断
-            Double adx = context.getIndicator("ADX");
-            if (hma != null && adx != null) {
-                // 趋势确认条件：HMA趋势明确 && ADX >= 18
-                boolean trendConfirmed = ("UP".equals(hma.getTrend()) || "DOWN".equals(hma.getTrend())) 
-                                        && adx >= 18.0;
-                builder.trendConfirmed(trendConfirmed);
-            }
-            
-            log.debug("[{}] 新指标数据已填充到TradingSignal", STRATEGY_NAME);
-            
-        } catch (Exception e) {
-            log.error("[{}] 填充新指标数据失败", STRATEGY_NAME, e);
-        }
+    @Override
+    public int getWeight() { return STRATEGY_WEIGHT; }
+
+    @Override
+    public String getDescription() {
+        return "三层串联过滤策略 v3 - 价格结构(S/R位) + 趋势方向(ADX/ST/EMA) + 入场触发(WR极值)";
     }
 }

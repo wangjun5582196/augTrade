@@ -180,7 +180,9 @@ public class TradingScheduler {
     
     // 🔥 P1修复-20260209: 最后一次开仓时间（用于最小开仓间隔控制）
     private LocalDateTime lastOpenTime = null;
-    private static final int MIN_OPEN_INTERVAL_SECONDS = 1800; // 🔥 最小开仓间隔30分钟
+    private static final int MIN_OPEN_INTERVAL_SECONDS = 1800;      // 做多间隔30分钟（防止追高）
+    // 🔥 Fix B-20260320: 做空间隔缩短至15分钟，反弹做空窗口短不能错过
+    private static final int MIN_OPEN_INTERVAL_SECONDS_SELL = 900;  // 做空间隔15分钟
     
     // 持仓时间管理常量 - ✨ 优化：增加持仓保护期，避免过早平仓
     private static final int MAX_HOLDING_SECONDS = 1800; // 最大持仓30分钟
@@ -364,13 +366,13 @@ public class TradingScheduler {
             log.info("✅ 启动数据已加载完成，开始执行交易策略");
         }
 
-        // 交易时段过滤：跳过低流动性时段
-        // 黄金活跃时段（北京时间）：伦敦盘(15:00-21:00) + 纽约盘(21:00-次日05:00)
-        // 跳过亚洲盘(08:00-14:00 BJT = UTC 00:00-06:00)：黄金横盘为主，假突破多
-        int utcHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC")).getHour();
-        if (utcHour >= 0 && utcHour < 6) {
-            log.debug("⏰ UTC {}:xx (北京 {}:xx) 处于亚洲低流动性时段，跳过本轮策略",
-                    utcHour, (utcHour + 8) % 24);
+        // 交易时段过滤（Fix2-20260320）：禁止北京时间 22:00-06:00 交易
+        // 数据分析：本周22:00-03:00共4单，全部亏损，合计-$539.80
+        // 原因：深夜流动性差、波动随机、主力机构不参与，假突破概率极高
+        // 允许时段：北京时间 06:00-22:00（覆盖亚盘+欧盘+美盘）
+        int bjHour = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Shanghai")).getHour();
+        if (bjHour >= 22 || bjHour < 6) {
+            log.debug("⏰ 北京时间 {}:xx 处于禁止交易时段(22:00-06:00)，跳过本轮策略", bjHour);
             return;
         }
 
@@ -444,17 +446,20 @@ public class TradingScheduler {
                 }
             }
             
-            // 6. 检查最小开仓间隔
+            // 6. 检查最小开仓间隔（Fix B-20260320：做空间隔15分钟，做多间隔30分钟）
             if (lastOpenTime != null) {
                 long secondsSinceLastOpen = Duration.between(lastOpenTime, LocalDateTime.now()).getSeconds();
-                if (secondsSinceLastOpen < MIN_OPEN_INTERVAL_SECONDS) {
-                    log.info("⏸️ 距离上次开仓仅{}秒（需要≥{}秒），防止连续追高开仓", 
-                            secondsSinceLastOpen, MIN_OPEN_INTERVAL_SECONDS);
+                boolean isSellSignal = tradingSignal.getType() ==
+                        com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL;
+                int requiredInterval = isSellSignal ? MIN_OPEN_INTERVAL_SECONDS_SELL : MIN_OPEN_INTERVAL_SECONDS;
+                if (secondsSinceLastOpen < requiredInterval) {
+                    log.info("⏸️ 距离上次开仓仅{}秒（{}需要≥{}秒）",
+                            secondsSinceLastOpen, isSellSignal ? "做空" : "做多", requiredInterval);
                     log.info("========================================");
                     return;
                 }
             }
-            
+
             // 7. 趋势反转检测
             if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
                 if (detectTrendReversal(binanceFuturesSymbol)) {
@@ -932,12 +937,15 @@ public class TradingScheduler {
                 }
             }
             
-            // 🔥 P1修复-20260209：最小开仓间隔检查（防止频繁连续开仓）
+            // 🔥 P1修复-20260209 / Fix B-20260320：最小开仓间隔检查（做空15分钟，做多30分钟）
             if (lastOpenTime != null) {
                 long secondsSinceLastOpen = Duration.between(lastOpenTime, LocalDateTime.now()).getSeconds();
-                if (secondsSinceLastOpen < MIN_OPEN_INTERVAL_SECONDS) {
-                    log.info("⏸️ 距离上次开仓仅{}秒（需要≥{}秒），防止连续追高开仓", 
-                            secondsSinceLastOpen, MIN_OPEN_INTERVAL_SECONDS);
+                boolean isSellSignal = tradingSignal.getType() ==
+                        com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL;
+                int requiredInterval = isSellSignal ? MIN_OPEN_INTERVAL_SECONDS_SELL : MIN_OPEN_INTERVAL_SECONDS;
+                if (secondsSinceLastOpen < requiredInterval) {
+                    log.info("⏸️ 距离上次开仓仅{}秒（{}需要≥{}秒）",
+                            secondsSinceLastOpen, isSellSignal ? "做空" : "做多", requiredInterval);
                     log.info("========================================");
                     return;
                 }

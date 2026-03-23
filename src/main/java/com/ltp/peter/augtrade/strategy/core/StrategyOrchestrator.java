@@ -5,6 +5,7 @@ import com.ltp.peter.augtrade.indicator.*;
 import com.ltp.peter.augtrade.indicator.VWAPCalculator;
 import com.ltp.peter.augtrade.indicator.SupertrendCalculator;
 import com.ltp.peter.augtrade.indicator.OBVCalculator;
+import com.ltp.peter.augtrade.indicator.KeyLevelCalculator;
 import com.ltp.peter.augtrade.market.MarketDataService;
 import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
@@ -70,7 +71,13 @@ public class StrategyOrchestrator {
     
     @Autowired
     private OBVCalculator obvCalculator;
-    
+
+    @Autowired
+    private KeyLevelCalculator keyLevelCalculator;
+
+    @Autowired(required = false)
+    private HMACalculator hmaCalculator;
+
     /**
      * 🔥 P0修复-20260316: 信号+上下文联合结果
      *
@@ -90,7 +97,7 @@ public class StrategyOrchestrator {
      * 确保 signal 和 context 使用完全相同的数据集，避免指标值不一致
      */
     public SignalResult generateSignalWithContext(String symbol) {
-        return generateSignalWithContext(symbol, 200);
+        return generateSignalWithContext(symbol, 300);
     }
 
     /**
@@ -145,7 +152,7 @@ public class StrategyOrchestrator {
      * @return 交易信号
      */
     public TradingSignal generateSignal(String symbol) {
-        return generateSignal(symbol, 200); // 200根K线（约16.7小时），保证长周期指标（EMA50/ADX）有足够数据
+        return generateSignal(symbol, 300); // 300根K线（约25小时），覆盖前日高低点计算
     }
     
     /**
@@ -351,7 +358,23 @@ public class StrategyOrchestrator {
             // 🔥 P1新增-20260316: 多时间框架宏观趋势
             calculateMacroTrend(context);
 
-            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标（含VWAP/Supertrend/OBV/MacroTrend）", context.getIndicators().size());
+            // 🔥 新增-重构v3: HMA趋势（供 Layer2 冲突检测）
+            if (hmaCalculator != null) {
+                HMACalculator.HMAResult hma = hmaCalculator.calculate(klines);
+                if (hma != null) {
+                    context.addIndicator("HMA", hma);
+                    log.info("[StrategyOrchestrator] HMA20={} 斜率={} 趋势={}",
+                            String.format("%.2f", hma.getHma20()), String.format("%.4f", hma.getSlope()), hma.getTrend());
+                }
+            }
+
+            // 🔥 新增-重构v3: 关键支撑/阻力位（Layer 1 价格结构）
+            KeyLevelCalculator.KeyLevelResult keyLevels = keyLevelCalculator.calculate(klines);
+            if (keyLevels != null) {
+                context.addIndicator("KeyLevels", keyLevels);
+            }
+
+            log.info("[StrategyOrchestrator] 成功计算 {} 个技术指标（含VWAP/Supertrend/OBV/MacroTrend/KeyLevels）", context.getIndicators().size());
             
         } catch (Exception e) {
             log.error("[StrategyOrchestrator] 计算技术指标时发生错误", e);
@@ -441,23 +464,25 @@ public class StrategyOrchestrator {
     private void calculateMacroTrend(MarketContext context) {
         List<Kline> klines = context.getKlines();
 
-        // 需要至少60根K线（5小时数据）
-        int lookback = Math.min(60, klines.size() - 1);
-        if (lookback < 30) {
+        // 5小时窗口（60根5分钟K线）
+        int lookback5h = Math.min(60, klines.size() - 1);
+        if (lookback5h < 30) {
             log.debug("[StrategyOrchestrator] K线不足30根，跳过宏观趋势计算");
             return;
         }
 
         BigDecimal currentPrice = klines.get(0).getClosePrice();
-        BigDecimal pastPrice = klines.get(lookback).getClosePrice();
-        double priceChangePercent = currentPrice.subtract(pastPrice)
-                .divide(pastPrice, 6, BigDecimal.ROUND_HALF_UP)
+
+        // 5小时价格变化
+        BigDecimal price5hAgo = klines.get(lookback5h).getClosePrice();
+        double priceChangePercent = currentPrice.subtract(price5hAgo)
+                .divide(price5hAgo, 6, BigDecimal.ROUND_HALF_UP)
                 .doubleValue() * 100;
 
-        // 统计区间内涨跌K线比例
+        // 统计5小时内涨跌K线比例
         int upCount = 0;
         int downCount = 0;
-        for (int i = 0; i < lookback; i++) {
+        for (int i = 0; i < lookback5h; i++) {
             BigDecimal close = klines.get(i).getClosePrice();
             BigDecimal prevClose = klines.get(i + 1).getClosePrice();
             int cmp = close.compareTo(prevClose);
@@ -465,9 +490,29 @@ public class StrategyOrchestrator {
             else if (cmp < 0) downCount++;
         }
 
+        // 🔥 Fix A-20260320: 24小时参照系，区分"真宏观上涨"和"下跌中的反弹"
+        // 24小时 = 288根5分钟K线
+        int lookback24h = Math.min(288, klines.size() - 1);
+        double priceChange24h = 0.0;
+        if (lookback24h >= 60) {
+            BigDecimal price24hAgo = klines.get(lookback24h).getClosePrice();
+            priceChange24h = currentPrice.subtract(price24hAgo)
+                    .divide(price24hAgo, 6, BigDecimal.ROUND_HALF_UP)
+                    .doubleValue() * 100;
+        }
+
         String macroTrend;
         if (priceChangePercent > 0.3 && upCount > downCount) {
-            macroTrend = "MACRO_UP";
+            // 5小时看涨，但需要区分是真上涨还是大跌后的反弹
+            if (lookback24h >= 60 && priceChange24h < -0.5) {
+                // 24小时大跌（>-0.5%）背景下的5小时反弹 = 反弹，允许做空
+                macroTrend = "MACRO_REBOUND";
+                log.info("[StrategyOrchestrator] 🔄 识别为下跌反弹（5h:+{}% 但 24h:{}%），允许做空",
+                        String.format("%.2f", priceChangePercent),
+                        String.format("%.2f", priceChange24h));
+            } else {
+                macroTrend = "MACRO_UP";
+            }
         } else if (priceChangePercent < -0.3 && downCount > upCount) {
             macroTrend = "MACRO_DOWN";
         } else {
@@ -476,10 +521,13 @@ public class StrategyOrchestrator {
 
         context.addIndicator("MacroTrend", macroTrend);
         context.addIndicator("MacroPriceChange", priceChangePercent);
+        context.addIndicator("MacroPriceChange24h", priceChange24h);
 
-        log.info("[StrategyOrchestrator] 📊 宏观趋势({}根K线): {} (变化: {}%, 涨:{}/跌:{})",
-                lookback, macroTrend,
-                String.format("%.2f", priceChangePercent), upCount, downCount);
+        log.info("[StrategyOrchestrator] 📊 宏观趋势(5h/24h): {} (5h变化:{}%, 24h变化:{}%, 涨:{}/跌:{})",
+                macroTrend,
+                String.format("%.2f", priceChangePercent),
+                String.format("%.2f", priceChange24h),
+                upCount, downCount);
     }
 
     /**

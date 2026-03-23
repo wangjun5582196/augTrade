@@ -37,6 +37,7 @@ public class SupertrendStrategy implements Strategy {
 
     private static final String STRATEGY_NAME = "Supertrend";
     private static final int STRATEGY_WEIGHT = 8;
+    // 重构v3：Supertrend不再参与投票，方向判断已内化到 CompositeStrategy Layer2
 
     @Override
     public TradingSignal generateSignal(MarketContext context) {
@@ -199,18 +200,17 @@ public class SupertrendStrategy implements Strategy {
     }
 
     @Override
-    public String getName() {
-        return STRATEGY_NAME;
-    }
+    public String getName() { return STRATEGY_NAME; }
 
     @Override
-    public int getWeight() {
-        return STRATEGY_WEIGHT;
-    }
+    public int getWeight() { return STRATEGY_WEIGHT; }
+
+    @Override
+    public boolean isEnabled() { return false; } // 重构v3已禁用投票
 
     @Override
     public String getDescription() {
-        return "Supertrend策略 - 基于ATR的趋势跟踪策略，兼具趋势判断与动态止损";
+        return "Supertrend — 重构v3已禁用投票，趋势方向判断内化至CompositeStrategy Layer2";
     }
 
     private TradingSignal createHoldSignal(String reason) {

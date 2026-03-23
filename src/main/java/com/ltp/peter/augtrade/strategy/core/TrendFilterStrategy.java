@@ -38,7 +38,8 @@ public class TrendFilterStrategy implements Strategy {
     @Autowired
     private MarketRegimeDetector regimeDetector;
     
-    private boolean enabled = true;
+    // 重构v3：TrendFilter不再参与投票，趋势判断已内化到 CompositeStrategy Layer2
+    private boolean enabled = false;
     
     @Override
     public TradingSignal generateSignal(MarketContext context) {
