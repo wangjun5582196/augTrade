@@ -67,14 +67,18 @@ public class KeyLevelCalculator {
         // 去重合并：距离 < 0.2% 的相邻位合并取中间值，强度取最高
         allLevels = mergeLevels(allLevels, currentPrice);
 
-        // 找最近支撑（当前价格下方）和最近阻力（当前价格上方）
+        // 找最近支撑（当前价格下方，且类型为SUPPORT）
+        // 严格按 LevelType 过滤：SwingLow=SUPPORT，SwingHigh=RESISTANCE
+        // 不允许 SwingLow 出现在阻力位（牛市中会制造大量假做空信号）
         KeyLevel nearestSupport = allLevels.stream()
                 .filter(l -> l.getPrice() < currentPrice)
+                .filter(l -> l.getType() == LevelType.SUPPORT)
                 .max(Comparator.comparingDouble(KeyLevel::getPrice))
                 .orElse(null);
 
         KeyLevel nearestResistance = allLevels.stream()
                 .filter(l -> l.getPrice() > currentPrice)
+                .filter(l -> l.getType() == LevelType.RESISTANCE)
                 .min(Comparator.comparingDouble(KeyLevel::getPrice))
                 .orElse(null);
 
@@ -86,16 +90,18 @@ public class KeyLevelCalculator {
         boolean isAtSupport = distToSupportPct <= AT_LEVEL_THRESHOLD_PCT;
         boolean isAtResistance = distToResistancePct <= AT_LEVEL_THRESHOLD_PCT;
 
-        // 找第二近支撑/阻力（用于 TP 计算）
+        // 找第二近支撑/阻力（用于 TP 计算），同样严格按 LevelType 过滤
         KeyLevel secondSupport = allLevels.stream()
                 .filter(l -> nearestSupport == null || l.getPrice() < nearestSupport.getPrice() - 0.5)
                 .filter(l -> l.getPrice() < currentPrice)
+                .filter(l -> l.getType() == LevelType.SUPPORT)
                 .max(Comparator.comparingDouble(KeyLevel::getPrice))
                 .orElse(null);
 
         KeyLevel secondResistance = allLevels.stream()
                 .filter(l -> nearestResistance == null || l.getPrice() > nearestResistance.getPrice() + 0.5)
                 .filter(l -> l.getPrice() > currentPrice)
+                .filter(l -> l.getType() == LevelType.RESISTANCE)
                 .min(Comparator.comparingDouble(KeyLevel::getPrice))
                 .orElse(null);
 
@@ -193,15 +199,13 @@ public class KeyLevelCalculator {
 
         for (double level = start; level <= end; level += ROUND_NUMBER_STEP) {
             double roundedLevel = Math.round(level / ROUND_NUMBER_STEP) * ROUND_NUMBER_STEP;
-            // $50 整数关口强度更高
             LevelStrength strength = (roundedLevel % 50 == 0) ? LevelStrength.STRONG : LevelStrength.MEDIUM;
-            LevelType type = roundedLevel >= currentPrice ? LevelType.RESISTANCE : LevelType.SUPPORT;
-            levels.add(KeyLevel.builder()
-                    .price(roundedLevel)
-                    .type(type)
-                    .strength(strength)
-                    .source(roundedLevel % 50 == 0 ? "Round50" : "Round25")
-                    .build());
+            String source = roundedLevel % 50 == 0 ? "Round50" : "Round25";
+            // 整数关口同时注册为支撑和阻力（双向有效），避免仅按当前价格分类导致合并后类型错误
+            levels.add(KeyLevel.builder().price(roundedLevel).type(LevelType.SUPPORT)
+                    .strength(strength).source(source).build());
+            levels.add(KeyLevel.builder().price(roundedLevel).type(LevelType.RESISTANCE)
+                    .strength(strength).source(source).build());
         }
     }
 
@@ -258,7 +262,8 @@ public class KeyLevelCalculator {
     private List<KeyLevel> mergeLevels(List<KeyLevel> levels, double currentPrice) {
         if (levels.isEmpty()) return levels;
 
-        levels.sort(Comparator.comparingDouble(KeyLevel::getPrice));
+        levels.sort(Comparator.comparingDouble(KeyLevel::getPrice)
+                .thenComparing(l -> l.getType().ordinal()));
 
         List<KeyLevel> merged = new ArrayList<>();
         KeyLevel current = levels.get(0);
@@ -267,7 +272,8 @@ public class KeyLevelCalculator {
             KeyLevel next = levels.get(i);
             double distPct = (next.getPrice() - current.getPrice()) / currentPrice * 100;
 
-            if (distPct < 0.2) {
+            // 只合并相同类型的相邻位，禁止将 RESISTANCE 合并进 SUPPORT（反之亦然）
+            if (distPct < 0.2 && current.getType() == next.getType()) {
                 // 合并：取中间价，强度取高
                 double midPrice = (current.getPrice() + next.getPrice()) / 2;
                 LevelStrength stronger = current.getStrength().ordinal() <= next.getStrength().ordinal()

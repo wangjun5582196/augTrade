@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 
 /**
@@ -97,7 +98,7 @@ public class StrategyOrchestrator {
      * 确保 signal 和 context 使用完全相同的数据集，避免指标值不一致
      */
     public SignalResult generateSignalWithContext(String symbol) {
-        return generateSignalWithContext(symbol, 300);
+        return generateSignalWithContext(symbol, 8640); // 8640根=30天，覆盖长线宏观趋势
     }
 
     /**
@@ -152,7 +153,7 @@ public class StrategyOrchestrator {
      * @return 交易信号
      */
     public TradingSignal generateSignal(String symbol) {
-        return generateSignal(symbol, 300); // 300根K线（约25小时），覆盖前日高低点计算
+        return generateSignal(symbol, 8640); // 8640根K线（30天），覆盖长线宏观趋势计算
     }
     
     /**
@@ -458,8 +459,10 @@ public class StrategyOrchestrator {
     /**
      * 🔥 P1新增-20260316: 计算多时间框架宏观趋势
      *
-     * 用较长周期的价格变化判断大趋势方向，弥补5分钟EMA的滞后性
-     * 计算最近60根K线（5小时）的价格变化方向和幅度
+     * 三窗口设计：
+     *   5h  (60根)   — 短期冲量方向
+     *   24h (288根)  — 区分"真上涨"与"大跌中的反弹"
+     *   7d  (2016根) — 月级别大趋势：> +3% = MACRO_BULL，< -3% = MACRO_BEAR
      */
     private void calculateMacroTrend(MarketContext context) {
         List<Kline> klines = context.getKlines();
@@ -476,7 +479,7 @@ public class StrategyOrchestrator {
         // 5小时价格变化
         BigDecimal price5hAgo = klines.get(lookback5h).getClosePrice();
         double priceChangePercent = currentPrice.subtract(price5hAgo)
-                .divide(price5hAgo, 6, BigDecimal.ROUND_HALF_UP)
+                .divide(price5hAgo, 6, RoundingMode.HALF_UP)
                 .doubleValue() * 100;
 
         // 统计5小时内涨跌K线比例
@@ -490,22 +493,55 @@ public class StrategyOrchestrator {
             else if (cmp < 0) downCount++;
         }
 
-        // 🔥 Fix A-20260320: 24小时参照系，区分"真宏观上涨"和"下跌中的反弹"
-        // 24小时 = 288根5分钟K线
+        // 24小时参照系，区分"真宏观上涨"和"下跌中的反弹"
         int lookback24h = Math.min(288, klines.size() - 1);
         double priceChange24h = 0.0;
         if (lookback24h >= 60) {
             BigDecimal price24hAgo = klines.get(lookback24h).getClosePrice();
             priceChange24h = currentPrice.subtract(price24hAgo)
-                    .divide(price24hAgo, 6, BigDecimal.ROUND_HALF_UP)
+                    .divide(price24hAgo, 6, RoundingMode.HALF_UP)
                     .doubleValue() * 100;
         }
 
+        // 7天参照系（2016根5分钟K线），识别中期趋势
+        int lookback7d = Math.min(2016, klines.size() - 1);
+        double priceChange7d = 0.0;
+        if (lookback7d >= 288) {
+            BigDecimal price7dAgo = klines.get(lookback7d).getClosePrice();
+            priceChange7d = currentPrice.subtract(price7dAgo)
+                    .divide(price7dAgo, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+        }
+
+        // 30天参照系（8640根5分钟K线），识别长线牛市/熊市
+        int lookback30d = Math.min(8640, klines.size() - 1);
+        double priceChange30d = 0.0;
+        if (lookback30d >= 2016) {
+            BigDecimal price30dAgo = klines.get(lookback30d).getClosePrice();
+            priceChange30d = currentPrice.subtract(price30dAgo)
+                    .divide(price30dAgo, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+        }
+
+        // 优先级：7d中趋势 > 24h+7d联合信号 > 5h短趋势
+        // 30d仅作辅助参考（记录于context），不作硬性拦截
         String macroTrend;
-        if (priceChangePercent > 0.3 && upCount > downCount) {
-            // 5小时看涨，但需要区分是真上涨还是大跌后的反弹
+        if (priceChange7d > 1.5) {
+            macroTrend = "MACRO_BULL";
+        } else if (priceChange7d < -1.5) {
+            macroTrend = "MACRO_BEAR";
+        } else if (priceChange24h > 0.5 && priceChange7d > 0) {
+            macroTrend = "MACRO_BULL";
+            log.info("[StrategyOrchestrator] 📈 24h+7d联合上涨(24h:+{}% 7d:+{}%)，识别为MACRO_BULL",
+                    String.format("%.2f", priceChange24h),
+                    String.format("%.2f", priceChange7d));
+        } else if (priceChange24h < -0.5 && priceChange7d < 0) {
+            macroTrend = "MACRO_BEAR";
+            log.info("[StrategyOrchestrator] 📉 24h+7d联合下跌(24h:{}% 7d:{}%)，识别为MACRO_BEAR",
+                    String.format("%.2f", priceChange24h),
+                    String.format("%.2f", priceChange7d));
+        } else if (priceChangePercent > 0.3 && upCount > downCount) {
             if (lookback24h >= 60 && priceChange24h < -0.5) {
-                // 24小时大跌（>-0.5%）背景下的5小时反弹 = 反弹，允许做空
                 macroTrend = "MACRO_REBOUND";
                 log.info("[StrategyOrchestrator] 🔄 识别为下跌反弹（5h:+{}% 但 24h:{}%），允许做空",
                         String.format("%.2f", priceChangePercent),
@@ -522,12 +558,15 @@ public class StrategyOrchestrator {
         context.addIndicator("MacroTrend", macroTrend);
         context.addIndicator("MacroPriceChange", priceChangePercent);
         context.addIndicator("MacroPriceChange24h", priceChange24h);
+        context.addIndicator("MacroPriceChange7d", priceChange7d);
+        context.addIndicator("MacroPriceChange30d", priceChange30d);
 
-        log.info("[StrategyOrchestrator] 📊 宏观趋势(5h/24h): {} (5h变化:{}%, 24h变化:{}%, 涨:{}/跌:{})",
+        log.info("[StrategyOrchestrator] 📊 宏观趋势(5h/24h/7d/30d): {} (5h:{}%, 24h:{}%, 7d:{}%, 30d:{}%)",
                 macroTrend,
                 String.format("%.2f", priceChangePercent),
                 String.format("%.2f", priceChange24h),
-                upCount, downCount);
+                String.format("%.2f", priceChange7d),
+                String.format("%.2f", priceChange30d));
     }
 
     /**

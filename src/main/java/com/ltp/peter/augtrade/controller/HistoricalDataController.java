@@ -1,6 +1,7 @@
 package com.ltp.peter.augtrade.controller;
 
 import com.ltp.peter.augtrade.market.BinanceHistoricalDataFetcher;
+import com.ltp.peter.augtrade.market.OkxKlineDataFetcher;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +25,9 @@ public class HistoricalDataController {
     
     @Autowired
     private BinanceHistoricalDataFetcher binanceFetcher;
+
+    @Autowired
+    private OkxKlineDataFetcher okxFetcher;
     
     /**
      * 获取币安XAUUSDT一年的历史数据
@@ -174,8 +178,75 @@ public class HistoricalDataController {
     }
     
     /**
+     * 用 OKX 补缺最近 N 天的 K 线（推荐，境内访问更稳定）
+     *
+     * GET /api/historical/okx/xauusdt/recent?days=14
+     */
+    @GetMapping("/okx/xauusdt/recent")
+    public Map<String, Object> fetchOkxRecent(
+            @RequestParam(defaultValue = "14") int days) {
+
+        Map<String, Object> result = new HashMap<>();
+        try {
+            long t0 = System.currentTimeMillis();
+            int count = okxFetcher.fetchRecentDays("XAUUSDT", days);
+            long duration = (System.currentTimeMillis() - t0) / 1000;
+            result.put("success", true);
+            result.put("source", "OKX");
+            result.put("days", days);
+            result.put("newBars", count);
+            result.put("duration", duration + "s");
+            result.put("message", String.format("OKX 补缺最近%d天，新增%d根K线，耗时%ds", days, count, duration));
+            log.info("✅ OKX 补缺完成: 新增{}根, 耗时{}s", count, duration);
+        } catch (Exception e) {
+            log.error("OKX 补缺失败", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 用 OKX 补缺指定日期范围的 K 线
+     *
+     * GET /api/historical/okx/xauusdt/custom?startDate=2026-03-13&endDate=2026-03-26
+     */
+    @GetMapping("/okx/xauusdt/custom")
+    public Map<String, Object> fetchOkxCustom(
+            @RequestParam String startDate,
+            @RequestParam String endDate) {
+
+        Map<String, Object> result = new HashMap<>();
+        try {
+            LocalDateTime start = LocalDateTime.parse(startDate + "T00:00:00");
+            LocalDateTime end   = LocalDateTime.parse(endDate   + "T23:59:59");
+            long startMs = start.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long endMs   = end  .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+
+            long t0 = System.currentTimeMillis();
+            int count = okxFetcher.fetchHistoricalKlines("XAUUSDT", startMs, endMs);
+            long duration = (System.currentTimeMillis() - t0) / 1000;
+
+            result.put("success", true);
+            result.put("source", "OKX");
+            result.put("startDate", startDate);
+            result.put("endDate", endDate);
+            result.put("newBars", count);
+            result.put("duration", duration + "s");
+            result.put("message", String.format("OKX 补缺 %s→%s，新增%d根K线，耗时%ds",
+                    startDate, endDate, count, duration));
+            log.info("✅ OKX 自定义补缺完成: {}→{} 新增{}根, 耗时{}s", startDate, endDate, count, duration);
+        } catch (Exception e) {
+            log.error("OKX 自定义补缺失败", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
      * 自定义时间范围抓取
-     * 
+     *
      * GET /api/historical/binance/xauusdt/custom?startDate=2025-01-01&endDate=2026-01-01&interval=1h
      * 
      * @param startDate 开始日期（yyyy-MM-dd）

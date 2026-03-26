@@ -55,7 +55,26 @@ public class BacktestService {
     
     @Autowired
     private com.ltp.peter.augtrade.strategy.core.CompositeStrategy compositeStrategy;
-    
+
+    // v3 回测所需的额外指标计算器
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.WilliamsRCalculator williamsRCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.EMACalculator emaCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.SupertrendCalculator supertrendCalculator;
+
+    @Autowired(required = false)
+    private com.ltp.peter.augtrade.indicator.HMACalculator hmaCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.KeyLevelCalculator keyLevelCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.CandlePatternAnalyzer candlePatternAnalyzer;
+
     // 手续费率 (0.05% * 0.7 = 0.035%, VIP折扣)
     private static final BigDecimal FEE_RATE = new BigDecimal("0.00035");
     
@@ -122,6 +141,9 @@ public class BacktestService {
                     break;
                 case "COMPOSITE":
                     strategyResult = executeCompositeBacktest(backtestId, symbol, interval, klines, initialCapital);
+                    break;
+                case "COMPOSITE_V3":
+                    strategyResult = executeCompositeV3Backtest(backtestId, symbol, interval, klines, initialCapital);
                     break;
                 default:
                     log.error("未知的策略: {}", strategyName);
@@ -1032,6 +1054,303 @@ public class BacktestService {
         }
     }
     
+    // ══════════════════════════════════════════════════════════
+    // COMPOSITE_V3 回测 — 三层串联过滤策略
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * 执行 CompositeStrategy v3 回测
+     *
+     * 与旧 COMPOSITE 的核心区别：
+     *   1. K线窗口从 100 提升到 300（覆盖前日高低点 PDH/PDL）
+     *   2. 使用信号自带的 ATR-based SL/TP（不再用固定 $15/$45）
+     *   3. 同时支持做多和做空（v3 已内置严格的三层过滤）
+     *   4. 完整计算 v3 所需指标：KeyLevels/Supertrend/EMATrend/HMA
+     */
+    private BacktestResult executeCompositeV3Backtest(String backtestId, String symbol, String interval,
+                                                       List<Kline> klines, BigDecimal initialCapital) {
+        log.info("[V3回测] 开始 CompositeStrategy v3 回测 | K线总数: {} | 品种: {}", klines.size(), symbol);
+
+        BigDecimal capital = initialCapital;
+        BigDecimal maxCapital = initialCapital;
+        List<BacktestTrade> trades = new ArrayList<>();
+        BacktestTrade openPosition = null;
+
+        // 从第 2016 根开始（保证 7d MacroTrend 窗口充足：2016根5m ≈ 7天）
+        int startIndex = Math.min(2016, klines.size() / 2);
+
+        for (int i = startIndex; i < klines.size(); i++) {
+            Kline currentKline = klines.get(i);
+            BigDecimal currentPrice = currentKline.getClosePrice();
+
+            // ── 检查止盈止损 ──
+            if (openPosition != null) {
+                boolean shouldExit = false;
+                String exitReason = "";
+
+                if ("BUY".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) >= 0) {
+                        shouldExit = true;
+                        exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) <= 0) {
+                        shouldExit = true;
+                        exitReason = "STOP_LOSS";
+                    }
+                } else if ("SELL".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) <= 0) {
+                        shouldExit = true;
+                        exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) >= 0) {
+                        shouldExit = true;
+                        exitReason = "STOP_LOSS";
+                    }
+                }
+
+                if (shouldExit) {
+                    openPosition = closePosition(openPosition, currentPrice,
+                            currentKline.getTimestamp(), exitReason, capital);
+                    capital = capital.add(openPosition.getProfitLoss()).subtract(openPosition.getFee());
+                    trades.add(openPosition);
+                    if (capital.compareTo(maxCapital) > 0) maxCapital = capital;
+                    openPosition = null;
+                }
+            }
+
+            // ── 无持仓时检查新信号 ──
+            if (openPosition == null) {
+                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal =
+                        evaluateCompositeV3Signal(symbol, klines, i);
+
+                if (signal != null && (signal.isBuy() || signal.isSell())) {
+                    String side = signal.isBuy() ? "BUY" : "SELL";
+                    BigDecimal sl = signal.getSuggestedStopLoss();
+                    BigDecimal tp = signal.getSuggestedTakeProfit();
+
+                    if (sl != null && tp != null) {
+                        openPosition = openPositionV3(backtestId, symbol, side,
+                                currentPrice, currentKline.getTimestamp(), sl, tp,
+                                signal.getReason());
+                        log.info("[V3回测] {} 开仓 @ {} | SL={} TP={} | {}",
+                                side, currentPrice, sl, tp, signal.getReason());
+                    }
+                }
+            }
+        }
+
+        // 回测结束强制平仓
+        if (openPosition != null) {
+            Kline lastKline = klines.get(klines.size() - 1);
+            openPosition = closePosition(openPosition, lastKline.getClosePrice(),
+                    lastKline.getTimestamp(), "END_OF_BACKTEST", capital);
+            capital = capital.add(openPosition.getProfitLoss()).subtract(openPosition.getFee());
+            trades.add(openPosition);
+        }
+
+        for (BacktestTrade trade : trades) {
+            trade.setCreateTime(LocalDateTime.now());
+            backtestTradeMapper.insert(trade);
+        }
+
+        log.info("[V3回测] 完成 | 交易次数: {} | 最终资金: {} | 收益: {}",
+                trades.size(), capital, capital.subtract(initialCapital));
+        return calculateBacktestResult(symbol, interval, initialCapital, capital, maxCapital, trades);
+    }
+
+    /**
+     * 用 CompositeStrategy v3 评估当前 K 线的信号
+     *
+     * @param allKlines  正序 K 线列表（最旧在前）
+     * @param currentIndex 当前 K 线的索引
+     * @return TradingSignal（含 SL/TP），无信号返回 null
+     */
+    private com.ltp.peter.augtrade.strategy.signal.TradingSignal evaluateCompositeV3Signal(
+            String symbol, List<Kline> allKlines, int currentIndex) {
+        try {
+            // 取最近 2016 根 K 线（7d = 2016×5min），供 MacroTrend 7d 窗口使用，倒序（最新在前）
+            int windowSize = Math.min(2016, currentIndex + 1);
+            List<Kline> reversedKlines = new ArrayList<>(windowSize);
+            for (int j = currentIndex; j >= 0 && j > currentIndex - windowSize; j--) {
+                reversedKlines.add(allKlines.get(j));
+            }
+
+            if (reversedKlines.size() < 50) return null;
+
+            BigDecimal currentPrice = reversedKlines.get(0).getClosePrice();
+            com.ltp.peter.augtrade.strategy.core.MarketContext context =
+                    com.ltp.peter.augtrade.strategy.core.MarketContext.builder()
+                            .symbol(symbol)
+                            .klines(reversedKlines)
+                            .currentPrice(currentPrice)
+                            .timestamp(System.currentTimeMillis())
+                            .build();
+
+            calculateIndicatorsForV3Backtest(context);
+            return compositeStrategy.generateSignal(context);
+
+        } catch (Exception e) {
+            log.error("[V3回测] 信号评估异常", e);
+            return null;
+        }
+    }
+
+    /**
+     * 为 v3 回测计算全量技术指标
+     *
+     * 必须与 StrategyOrchestrator.calculateAllIndicators() 中 CompositeStrategy 依赖的指标保持一致：
+     *   Layer 1: KeyLevels
+     *   Layer 2: ADX, Supertrend, EMATrend, HMA
+     *   Layer 3: WilliamsR, CandlePattern
+     */
+    private void calculateIndicatorsForV3Backtest(
+            com.ltp.peter.augtrade.strategy.core.MarketContext context) {
+        List<Kline> klines = context.getKlines();
+        try {
+            // Layer 2: ADX
+            Double adx = adxCalculator.calculate(klines);
+            if (adx != null && adx > 0) context.addIndicator("ADX", adx);
+
+            // Layer 3: Williams %R
+            Double wr = williamsRCalculator.calculate(klines);
+            if (wr != null) context.addIndicator("WilliamsR", wr);
+
+            // Layer 2: Supertrend
+            com.ltp.peter.augtrade.indicator.SupertrendCalculator.SupertrendResult st =
+                    supertrendCalculator.calculate(klines);
+            if (st != null) context.addIndicator("Supertrend", st);
+
+            // Layer 2: EMA Trend (EMA20/EMA50)
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend emaTrend =
+                    emaCalculator.calculateTrend(klines, 20, 50);
+            if (emaTrend != null) context.addIndicator("EMATrend", emaTrend);
+
+            // Layer 2: HMA（可选，冲突检测）
+            if (hmaCalculator != null) {
+                com.ltp.peter.augtrade.indicator.HMACalculator.HMAResult hma =
+                        hmaCalculator.calculate(klines);
+                if (hma != null) context.addIndicator("HMA", hma);
+            }
+
+            // Layer 1: 关键支撑阻力位
+            com.ltp.peter.augtrade.indicator.KeyLevelCalculator.KeyLevelResult keyLevels =
+                    keyLevelCalculator.calculate(klines);
+            if (keyLevels != null) context.addIndicator("KeyLevels", keyLevels);
+
+            // Layer 3: K 线形态
+            com.ltp.peter.augtrade.indicator.CandlePattern pattern =
+                    candlePatternAnalyzer.calculate(klines);
+            if (pattern != null && pattern.hasPattern()) context.addIndicator("CandlePattern", pattern);
+
+            // MacroTrend: 5h+24h 双窗口宏观趋势（与 StrategyOrchestrator 逻辑一致）
+            calculateMacroTrendForBacktest(context, klines);
+
+        } catch (Exception e) {
+            log.error("[V3回测] 指标计算异常", e);
+        }
+    }
+
+    /**
+     * 宏观趋势计算（复制自 StrategyOrchestrator.calculateMacroTrend，供回测使用）
+     *
+     * 三窗口设计：
+     *   5h  (60根)  — 短期冲量方向
+     *   24h (288根) — 区分"真上涨"与"大跌中的反弹"
+     *   7d  (2016根) — 月级别大趋势：> +3% = MACRO_BULL，< -3% = MACRO_BEAR
+     *
+     * MACRO_BULL → 在 CompositeStrategy 中禁止做空
+     * MACRO_BEAR → 在 CompositeStrategy 中禁止做多
+     */
+    private void calculateMacroTrendForBacktest(
+            com.ltp.peter.augtrade.strategy.core.MarketContext context,
+            List<com.ltp.peter.augtrade.entity.Kline> klines) {
+        int lookback5h = Math.min(60, klines.size() - 1);
+        if (lookback5h < 30) return;
+
+        BigDecimal currentPrice = klines.get(0).getClosePrice();
+
+        // 5小时变化
+        BigDecimal price5hAgo = klines.get(lookback5h).getClosePrice();
+        double change5h = currentPrice.subtract(price5hAgo)
+                .divide(price5hAgo, 6, RoundingMode.HALF_UP).doubleValue() * 100;
+
+        int upCount = 0, downCount = 0;
+        for (int i = 0; i < lookback5h; i++) {
+            int cmp = klines.get(i).getClosePrice().compareTo(klines.get(i + 1).getClosePrice());
+            if (cmp > 0) upCount++; else if (cmp < 0) downCount++;
+        }
+
+        // 24小时变化
+        int lookback24h = Math.min(288, klines.size() - 1);
+        double change24h = 0.0;
+        if (lookback24h >= 60) {
+            BigDecimal price24hAgo = klines.get(lookback24h).getClosePrice();
+            change24h = currentPrice.subtract(price24hAgo)
+                    .divide(price24hAgo, 6, RoundingMode.HALF_UP).doubleValue() * 100;
+        }
+
+        // 7天变化（2016根5分钟K线 = 7×24×60÷5）
+        int lookback7d = Math.min(2016, klines.size() - 1);
+        double change7d = 0.0;
+        if (lookback7d >= 288) {
+            BigDecimal price7dAgo = klines.get(lookback7d).getClosePrice();
+            change7d = currentPrice.subtract(price7dAgo)
+                    .divide(price7dAgo, 6, RoundingMode.HALF_UP).doubleValue() * 100;
+        }
+
+        // 30天变化（8640根5分钟K线 = 30×24×60÷5）
+        int lookback30d = Math.min(8640, klines.size() - 1);
+        double change30d = 0.0;
+        if (lookback30d >= 2016) {
+            BigDecimal price30dAgo = klines.get(lookback30d).getClosePrice();
+            change30d = currentPrice.subtract(price30dAgo)
+                    .divide(price30dAgo, 6, RoundingMode.HALF_UP).doubleValue() * 100;
+        }
+
+        // 优先级：7d中趋势 > 24h+7d联合信号 > 5h短趋势
+        // 30d仅作辅助参考，不作硬性拦截（30d>5%会堵掉牛市中的回调做空机会）
+        String macroTrend;
+        if (change7d > 1.5) {
+            macroTrend = "MACRO_BULL";
+        } else if (change7d < -1.5) {
+            macroTrend = "MACRO_BEAR";
+        } else if (change24h > 0.5 && change7d > 0) {
+            macroTrend = "MACRO_BULL";
+        } else if (change24h < -0.5 && change7d < 0) {
+            macroTrend = "MACRO_BEAR";
+        } else if (change5h > 0.3 && upCount > downCount) {
+            macroTrend = (lookback24h >= 60 && change24h < -0.5) ? "MACRO_REBOUND" : "MACRO_UP";
+        } else if (change5h < -0.3 && downCount > upCount) {
+            macroTrend = "MACRO_DOWN";
+        } else {
+            macroTrend = "MACRO_NEUTRAL";
+        }
+
+        context.addIndicator("MacroTrend", macroTrend);
+        context.addIndicator("MacroPriceChange", change5h);
+        context.addIndicator("MacroPriceChange24h", change24h);
+        context.addIndicator("MacroPriceChange7d", change7d);
+        context.addIndicator("MacroPriceChange30d", change30d);
+    }
+
+    /**
+     * v3 专用开仓 — SL/TP 直接来自信号（ATR-based），数量固定 10 手
+     */
+    private BacktestTrade openPositionV3(String backtestId, String symbol, String side,
+                                          BigDecimal price, LocalDateTime time,
+                                          BigDecimal stopLoss, BigDecimal takeProfit,
+                                          String signalDesc) {
+        BacktestTrade trade = new BacktestTrade();
+        trade.setBacktestId(backtestId);
+        trade.setSymbol(symbol);
+        trade.setSide(side);
+        trade.setEntryPrice(price);
+        trade.setEntryTime(time);
+        trade.setQuantity(new BigDecimal("10")); // 固定 10 手黄金（与实盘一致）
+        trade.setStopLossPrice(stopLoss);
+        trade.setTakeProfitPrice(takeProfit);
+        trade.setSignalDescription(signalDesc != null ? signalDesc : "V3-" + side);
+        return trade;
+    }
+
     /**
      * 获取K线周期对应的分钟数
      */

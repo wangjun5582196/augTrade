@@ -279,7 +279,7 @@
                     <div class="form-group">
                         <label>交易对</label>
                         <select id="symbol" required>
-                            <option value="XAUTUSDT">XAUTUSDT (黄金/美元)</option>
+                            <option value="XAUUSDT" selected>XAUUSDT (黄金/美元)</option>
                             <option value="BTCUSDT">BTCUSDT</option>
                             <option value="ETHUSDT">ETHUSDT</option>
                         </select>
@@ -297,7 +297,11 @@
                     <div class="form-group">
                         <label>交易策略</label>
                         <select id="strategyName" required>
-                            <option value="COMPOSITE">组合策略（多策略投票）⭐</option>
+                            <option value="COMPOSITE_V3" selected>三层串联过滤 v3（当前策略）⭐</option>
+                            <option value="COMPOSITE">组合策略（旧版加权投票）</option>
+                            <option value="RSI">RSI 超买超卖</option>
+                            <option value="BREAKOUT">布林带突破</option>
+                            <option value="SHORT_TERM">SMA 短线交叉</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -532,24 +536,24 @@
                 
                 if (tradesData.success && tradesData.trades.length > 0) {
                     let html = '<table><thead><tr>';
-                    html += '<th>序号</th><th>方向</th><th>开仓价</th><th>平仓价</th>';
-                    html += '<th>数量</th><th>盈亏</th><th>盈亏率</th><th>手续费</th>';
-                    html += '<th>持仓时长</th><th>平仓原因</th><th>开仓时间</th>';
+                    html += '<th>序号</th><th>方向</th><th>开仓价</th><th>止损</th><th>止盈</th><th>平仓价</th>';
+                    html += '<th>盈亏</th><th>盈亏率</th><th>持仓时长</th><th>平仓原因</th><th>信号依据</th><th>开仓时间</th>';
                     html += '</tr></thead><tbody>';
-                    
+
                     tradesData.trades.forEach((t, index) => {
                         const profitColor = t.profitLoss >= 0 ? 'green' : 'red';
                         html += '<tr>';
                         html += `<td>${index + 1}</td>`;
-                        html += `<td><span class="badge ${t.side === 'BUY' ? 'badge-success' : 'badge-danger'}">${t.side}</span></td>`;
+                        html += `<td><span class="badge ${t.side === 'BUY' ? 'badge-success' : 'badge-danger'}">${t.side === 'BUY' ? '做多' : '做空'}</span></td>`;
                         html += `<td>$${t.entryPrice.toFixed(2)}</td>`;
-                        html += `<td>$${t.exitPrice.toFixed(2)}</td>`;
-                        html += `<td>${t.quantity.toFixed(4)}</td>`;
+                        html += `<td style="color:#dc3545;">$${t.stopLossPrice ? t.stopLossPrice.toFixed(2) : 'N/A'}</td>`;
+                        html += `<td style="color:#28a745;">$${t.takeProfitPrice ? t.takeProfitPrice.toFixed(2) : 'N/A'}</td>`;
+                        html += `<td>$${t.exitPrice ? t.exitPrice.toFixed(2) : 'N/A'}</td>`;
                         html += `<td style="color: ${profitColor}; font-weight: bold;">$${t.profitLoss.toFixed(2)}</td>`;
                         html += `<td style="color: ${profitColor};">${t.profitLossRate.toFixed(2)}%</td>`;
-                        html += `<td>$${t.fee.toFixed(2)}</td>`;
                         html += `<td>${t.holdingMinutes}分钟</td>`;
-                        html += `<td><span class="badge badge-info">${t.exitReason}</span></td>`;
+                        html += `<td><span class="badge badge-${t.exitReason === 'TAKE_PROFIT' ? 'success' : t.exitReason === 'STOP_LOSS' ? 'danger' : 'warning'}">${t.exitReason}</span></td>`;
+                        html += `<td style="font-size:12px;color:#555;max-width:200px;word-break:break-all;">${t.signalDescription || ''}</td>`;
                         html += `<td>${new Date(t.entryTime).toLocaleString('zh-CN')}</td>`;
                         html += '</tr>';
                     });

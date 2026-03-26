@@ -18,6 +18,8 @@ import com.ltp.peter.augtrade.trading.risk.RiskManagementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -78,12 +80,15 @@ public class TradingScheduler {
     
     @Autowired
     private FeishuNotificationService feishuNotificationService;
-    
+
     @Autowired
     private IndicatorService indicatorService;
-    
+
     @Autowired
     private com.ltp.peter.augtrade.indicator.EMACalculator emaCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.market.OkxKlineDataFetcher okxKlineDataFetcher;
     
     @Value("${trading.gold.symbol:XAUUSD}")
     private String symbol;
@@ -192,8 +197,14 @@ public class TradingScheduler {
     
     /**
      * 数据采集任务 - 每300秒（5分钟）执行一次
-     * 注意：采集频率应与K线周期匹配，避免重复数据
-     * 支持币安/Bybit黄金K线数据采集
+     *
+     * 数据源优先级：OKX（主）→ 币安（备）→ Bybit（备）
+     *
+     * OKX 每次取最近 3 根已完成K线：
+     *   - 正常情况：2 根重复（唯一索引跳过），1 根新增
+     *   - 上次失败：自动补上漏掉的，无需额外补缺逻辑
+     *
+     * 启动时额外触发一次补缺，填补服务重启期间的空白。
      */
     @Scheduled(fixedRate = 300000)
     public void collectMarketData() {
@@ -205,15 +216,59 @@ public class TradingScheduler {
             }
         }
         
-        // 🔥 优先使用币安（如果启用）
+        // 优先 OKX（无需 API Key，境内访问稳定，每次取 3 根自动补缺）
+        String targetSymbol = binanceEnabled ? binanceFuturesSymbol
+                : (bybitEnabled ? bybitSymbol : "XAUUSDT");
+        int okxResult = okxKlineDataFetcher.collectLatestKlines(targetSymbol, 3);
+        if (okxResult >= 0) {
+            // OKX 成功，不需要其他源
+            return;
+        }
+        log.warn("[Scheduler] OKX 采集失败，降级到备用数据源");
+
+        // 备用：币安
         if (binanceEnabled && binanceFuturesService != null) {
             collectBinanceData();
         }
-        // 如果启用Bybit，采集Bybit黄金数据
+        // 备用：Bybit
         else if (bybitEnabled && bybitTradingService.isEnabled()) {
             collectBybitData();
         }
-        // 否则不采集数据（避免无用的BTC数据）
+    }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean startupRepairDone =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 启动时补缺：服务重启后填补空白期的 K 线（最多补 48 根 = 4 小时）
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void repairKlineGapsOnStartup() {
+        if (!startupRepairDone.compareAndSet(false, true)) return; // 只执行一次
+        try {
+            String targetSymbol = binanceEnabled ? binanceFuturesSymbol
+                    : (bybitEnabled ? bybitSymbol : "XAUUSDT");
+
+            // 查数据库最新K线时间戳
+            java.util.List<com.ltp.peter.augtrade.entity.Kline> recent =
+                    marketDataService.getLatestKlines(targetSymbol, "5m", 1);
+            if (recent == null || recent.isEmpty()) return;
+
+            long latestTs = recent.get(0).getTimestamp()
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant().toEpochMilli();
+            long nowTs = System.currentTimeMillis();
+            long gapMs = nowTs - latestTs;
+            int gapBars = (int) (gapMs / (5 * 60 * 1000L)) - 1;
+
+            if (gapBars >= 2) {
+                log.info("[Startup] 检测到 {} 根K线缺口（约{}分钟），开始补缺...", gapBars, gapBars * 5);
+                int repairCount = Math.min(gapBars + 2, 48);
+                okxKlineDataFetcher.repairGap(targetSymbol, latestTs, repairCount);
+            }
+        } catch (Exception e) {
+            log.warn("[Startup] 补缺执行失败: {}", e.getMessage());
+        }
     }
     
     /**
@@ -298,7 +353,10 @@ public class TradingScheduler {
             Kline kline = new Kline();
             kline.setSymbol(binanceFuturesSymbol);
             kline.setInterval("5m");
-            kline.setTimestamp(LocalDateTime.now());
+            // 对齐到5分钟整点，避免产生带秒数的脏时间戳
+            LocalDateTime now = LocalDateTime.now();
+            kline.setTimestamp(now.withSecond(0).withNano(0)
+                    .withMinute((now.getMinute() / 5) * 5));
             kline.setOpenPrice(currentPrice);
             kline.setHighPrice(currentPrice);
             kline.setLowPrice(currentPrice);
@@ -330,7 +388,10 @@ public class TradingScheduler {
                 Kline kline = new Kline();
                 kline.setSymbol(bybitSymbol);
                 kline.setInterval("5m");
-                kline.setTimestamp(LocalDateTime.now());
+                // Bybit K线数据：klineData.get(0) 是开盘时间戳（秒），用它对齐时间
+                long bybitTs = klineData.get(0).getAsLong();
+                kline.setTimestamp(LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochSecond(bybitTs), java.time.ZoneId.systemDefault()));
                 kline.setOpenPrice(new BigDecimal(klineData.get(1).getAsString()));
                 kline.setHighPrice(new BigDecimal(klineData.get(2).getAsString()));
                 kline.setLowPrice(new BigDecimal(klineData.get(3).getAsString()));
