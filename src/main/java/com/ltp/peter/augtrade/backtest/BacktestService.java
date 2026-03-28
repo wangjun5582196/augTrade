@@ -75,6 +75,12 @@ public class BacktestService {
     @Autowired
     private com.ltp.peter.augtrade.indicator.CandlePatternAnalyzer candlePatternAnalyzer;
 
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.ATRCalculator atrCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.strategy.core.SRRejectionScalpingStrategy srRejectionScalpingStrategy;
+
     // 手续费率 (0.05% * 0.7 = 0.035%, VIP折扣)
     private static final BigDecimal FEE_RATE = new BigDecimal("0.00035");
     
@@ -144,6 +150,9 @@ public class BacktestService {
                     break;
                 case "COMPOSITE_V3":
                     strategyResult = executeCompositeV3Backtest(backtestId, symbol, interval, klines, initialCapital);
+                    break;
+                case "SR_REJECTION":
+                    strategyResult = executeSRRejectionBacktest(backtestId, symbol, interval, klines, initialCapital);
                     break;
                 default:
                     log.error("未知的策略: {}", strategyName);
@@ -1377,6 +1386,142 @@ public class BacktestService {
             default:
                 log.warn("未知的K线周期: {}, 默认使用5分钟", interval);
                 return 5;
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SR_REJECTION 回测 — S/R 影线拒绝剥头皮策略
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * 执行 SRRejectionScalpingStrategy 回测
+     *
+     * 与 V3 回测的核心区别：
+     *   - 无 ADX/Supertrend/EMA/MacroTrend 要求，纯价格行为
+     *   - K线窗口 300 根（覆盖 PDH/PDL + 足够的摆动点）
+     *   - SL/TP 由策略自身基于影线极值 + ATR 计算
+     */
+    private BacktestResult executeSRRejectionBacktest(String backtestId, String symbol, String interval,
+                                                       List<Kline> allKlines, BigDecimal initialCapital) {
+        log.info("[SRR回测] 开始 SR_REJECTION 回测 | K线总数: {} | 品种: {}", allKlines.size(), symbol);
+
+        BigDecimal capital = initialCapital;
+        BigDecimal maxCapital = initialCapital;
+        List<BacktestTrade> trades = new ArrayList<>();
+        BacktestTrade openPosition = null;
+
+        // 从第 300 根开始，保证 PDH/PDL 和摆动点有足够历史数据
+        int startIndex = Math.min(300, allKlines.size() / 2);
+
+        for (int i = startIndex; i < allKlines.size(); i++) {
+            Kline currentKline = allKlines.get(i);
+            BigDecimal currentPrice = currentKline.getClosePrice();
+
+            // ── 检查止盈止损 ──
+            if (openPosition != null) {
+                boolean shouldExit = false;
+                String exitReason = "";
+
+                if ("BUY".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) >= 0) {
+                        shouldExit = true; exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) <= 0) {
+                        shouldExit = true; exitReason = "STOP_LOSS";
+                    }
+                } else if ("SELL".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) <= 0) {
+                        shouldExit = true; exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) >= 0) {
+                        shouldExit = true; exitReason = "STOP_LOSS";
+                    }
+                }
+
+                if (shouldExit) {
+                    openPosition = closePosition(openPosition, currentPrice,
+                            currentKline.getTimestamp(), exitReason, capital);
+                    capital = capital.add(openPosition.getProfitLoss()); // 不计手续费
+                    trades.add(openPosition);
+                    if (capital.compareTo(maxCapital) > 0) maxCapital = capital;
+                    openPosition = null;
+                }
+            }
+
+            // ── 无持仓时检查新信号 ──
+            if (openPosition == null) {
+                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal =
+                        evaluateSRRejectionSignal(symbol, allKlines, i);
+
+                if (signal != null && (signal.isBuy() || signal.isSell())) {
+                    BigDecimal sl = signal.getSuggestedStopLoss();
+                    BigDecimal tp = signal.getSuggestedTakeProfit();
+                    if (sl != null && tp != null) {
+                        String side = signal.isBuy() ? "BUY" : "SELL";
+                        openPosition = openPositionV3(backtestId, symbol, side,
+                                currentPrice, currentKline.getTimestamp(), sl, tp,
+                                signal.getReason());
+                        log.info("[SRR回测] {} 开仓 @ {} | SL={} TP={} | {}",
+                                side, currentPrice, sl, tp, signal.getReason());
+                    }
+                }
+            }
+        }
+
+        // 回测结束强制平仓
+        if (openPosition != null) {
+            Kline lastKline = allKlines.get(allKlines.size() - 1);
+            openPosition = closePosition(openPosition, lastKline.getClosePrice(),
+                    lastKline.getTimestamp(), "END_OF_BACKTEST", capital);
+            capital = capital.add(openPosition.getProfitLoss()); // 不计手续费
+            trades.add(openPosition);
+        }
+
+        for (BacktestTrade trade : trades) {
+            trade.setCreateTime(LocalDateTime.now());
+            backtestTradeMapper.insert(trade);
+        }
+
+        log.info("[SRR回测] 完成 | 交易次数: {} | 最终资金: {} | 收益: {}",
+                trades.size(), capital, capital.subtract(initialCapital));
+        return calculateBacktestResult(symbol, interval, initialCapital, capital, maxCapital, trades);
+    }
+
+    /**
+     * 用 SRRejectionScalpingStrategy 评估当前 K 线的信号
+     *
+     * @param allKlines  正序 K 线列表（最旧在前）
+     * @param currentIndex 当前 K 线的索引
+     */
+    private com.ltp.peter.augtrade.strategy.signal.TradingSignal evaluateSRRejectionSignal(
+            String symbol, List<Kline> allKlines, int currentIndex) {
+        try {
+            // 取最近 300 根 K 线（覆盖 PDH/PDL 和摆动高低点），倒序（最新在前）
+            int windowSize = Math.min(300, currentIndex + 1);
+            List<Kline> reversedKlines = new ArrayList<>(windowSize);
+            for (int j = currentIndex; j >= 0 && j > currentIndex - windowSize; j--) {
+                reversedKlines.add(allKlines.get(j));
+            }
+
+            if (reversedKlines.size() < 30) return null;
+
+            BigDecimal currentPrice = reversedKlines.get(0).getClosePrice();
+            com.ltp.peter.augtrade.strategy.core.MarketContext context =
+                    com.ltp.peter.augtrade.strategy.core.MarketContext.builder()
+                            .symbol(symbol)
+                            .klines(reversedKlines)
+                            .currentPrice(currentPrice)
+                            .timestamp(System.currentTimeMillis())
+                            .build();
+
+            // SR_REJECTION 策略只需要 KeyLevels（ATR 由策略内部自行计算）
+            com.ltp.peter.augtrade.indicator.KeyLevelCalculator.KeyLevelResult keyLevels =
+                    keyLevelCalculator.calculate(reversedKlines);
+            if (keyLevels != null) context.addIndicator("KeyLevels", keyLevels);
+
+            return srRejectionScalpingStrategy.generateSignal(context);
+
+        } catch (Exception e) {
+            log.error("[SRR回测] 信号评估异常", e);
+            return null;
         }
     }
 }
