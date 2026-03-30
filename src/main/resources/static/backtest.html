@@ -341,7 +341,10 @@
 
         <!-- 回测详细结果 -->
         <div id="resultPanel" class="panel hidden">
-            <div class="panel-title">📈 回测结果详情</div>
+            <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>📈 回测结果详情</span>
+                <a id="chartLink" href="#" target="_blank" class="btn btn-secondary" style="padding:6px 16px;font-size:13px;text-decoration:none;">📊 查看K线图表</a>
+            </div>
             <div id="resultStats"></div>
             <div class="table-container">
                 <h3 style="margin: 30px 0 15px 0;">交易明细</h3>
@@ -441,7 +444,10 @@
                         html += `<td>${r.totalTrades}</td>`;
                         html += `<td><span class="badge badge-${r.status === 'COMPLETED' ? 'success' : r.status === 'FAILED' ? 'danger' : 'warning'}">${r.status}</span></td>`;
                         html += `<td>${new Date(r.createTime).toLocaleString('zh-CN')}</td>`;
-                        html += `<td><button class="btn btn-primary" style="padding: 5px 15px; font-size: 12px;" onclick="loadBacktestResult('${r.backtestId}')">查看详情</button></td>`;
+                        html += `<td style="white-space:nowrap;">
+    <button class="btn btn-primary" style="padding: 5px 12px; font-size: 12px;" onclick="loadBacktestResult('${r.backtestId}')">详情</button>
+    <a href="backtest-chart.html?id=${r.backtestId}" target="_blank" class="btn btn-secondary" style="padding: 5px 12px; font-size: 12px; text-decoration:none; display:inline-block; margin-left:4px;">📊 图表</a>
+</td>`;
                         html += '</tr>';
                     });
                     
@@ -462,6 +468,7 @@
             const tradesDiv = document.getElementById('tradesTable');
             
             panel.classList.remove('hidden');
+            document.getElementById('chartLink').href = `backtest-chart.html?id=${backtestId}`;
             statsDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>加载中...</p></div>';
             tradesDiv.innerHTML = '';
             

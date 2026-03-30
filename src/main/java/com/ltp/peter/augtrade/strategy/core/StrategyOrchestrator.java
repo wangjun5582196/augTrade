@@ -10,6 +10,7 @@ import com.ltp.peter.augtrade.market.MarketDataService;
 import com.ltp.peter.augtrade.strategy.signal.TradingSignal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -39,8 +40,14 @@ public class StrategyOrchestrator {
     @Autowired(required = false)
     private List<TechnicalIndicator<?>> indicators;
     
+    @Value("${trading.strategy.active:composite}")
+    private String activeStrategy;
+
     @Autowired
     private CompositeStrategy compositeStrategy;
+
+    @Autowired
+    private SRRejectionScalpingStrategy srRejectionScalpingStrategy;
     
     // 可选：单独注入各个指标计算器以便精确控制
     @Autowired
@@ -129,7 +136,10 @@ public class StrategyOrchestrator {
                     .build();
 
             calculateAllIndicators(context);
-            TradingSignal signal = compositeStrategy.generateSignal(context);
+
+            Strategy activeStrategyBean = resolveActiveStrategy();
+            log.info("[StrategyOrchestrator] 使用策略: {}", activeStrategyBean.getName());
+            TradingSignal signal = activeStrategyBean.generateSignal(context);
 
             if (signal == null) {
                 signal = createErrorSignal(symbol, "策略返回空信号");
@@ -198,8 +208,8 @@ public class StrategyOrchestrator {
             // 4. 计算所有技术指标
             calculateAllIndicators(context);
             
-            // 5. 使用组合策略生成信号
-            TradingSignal signal = compositeStrategy.generateSignal(context);
+            // 5. 使用激活策略生成信号
+            TradingSignal signal = resolveActiveStrategy().generateSignal(context);
             
             if (signal != null) {
                 log.info("[StrategyOrchestrator] 生成信号: {} - {} (强度: {}, 得分: {})", 
@@ -572,6 +582,16 @@ public class StrategyOrchestrator {
     /**
      * 创建错误信号
      */
+    /**
+     * 根据 trading.strategy.active 配置返回对应的策略 Bean
+     */
+    private Strategy resolveActiveStrategy() {
+        if ("sr_rejection".equalsIgnoreCase(activeStrategy)) {
+            return srRejectionScalpingStrategy;
+        }
+        return compositeStrategy;
+    }
+
     private TradingSignal createErrorSignal(String symbol, String reason) {
         return TradingSignal.builder()
                 .type(TradingSignal.SignalType.HOLD)

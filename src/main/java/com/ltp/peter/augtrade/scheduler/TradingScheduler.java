@@ -530,9 +530,9 @@ public class TradingScheduler {
                 }
             }
             
-            // 8. 市场状态识别
-            MarketRegime regime = detectMarketRegime(binanceFuturesSymbol);
-            int requiredStrength = calculateRequiredStrength(regime, tradingSignal);
+            // 8. 市场状态识别（复用已有上下文，避免重复拉K线）
+            MarketRegime regime = detectMarketRegime(signalResult.getContext());
+            int requiredStrength = calculateRequiredStrength(regime, tradingSignal, signalResult.getContext());
             
             // 9. 根据信号执行交易
             if (tradingSignal.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
@@ -1672,16 +1672,16 @@ public class TradingScheduler {
      * 使用与StrategyOrchestrator一致的ADX计算方法
      */
     private MarketRegime detectMarketRegime(String symbol) {
+        return detectMarketRegime(strategyOrchestrator.getMarketContext(symbol, 100));
+    }
+
+    private MarketRegime detectMarketRegime(com.ltp.peter.augtrade.strategy.core.MarketContext context) {
         try {
-            // 🔥 修复：从MarketContext获取ADX，确保与StrategyOrchestrator一致
-            com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                    strategyOrchestrator.getMarketContext(symbol, 100);
-            
             if (context == null) {
                 log.warn("⚠️ 无法获取市场上下文，默认为弱趋势");
                 return MarketRegime.WEAK_TREND;
             }
-            
+
             // 从context获取ADX（与StrategyOrchestrator使用同一份数据）
             Double adxValue = context.getIndicator("ADX");
             
@@ -1789,15 +1789,19 @@ public class TradingScheduler {
      * 🔥 修复：根据市场状态和信号类型计算所需信号强度
      * 细化ADX区间，降低门槛让策略能够正常开仓
      */
-    private int calculateRequiredStrength(MarketRegime regime, 
+    private int calculateRequiredStrength(MarketRegime regime,
                                          com.ltp.peter.augtrade.strategy.signal.TradingSignal signal) {
+        return calculateRequiredStrength(regime, signal, null);
+    }
+
+    private int calculateRequiredStrength(MarketRegime regime,
+                                         com.ltp.peter.augtrade.strategy.signal.TradingSignal signal,
+                                         com.ltp.peter.augtrade.strategy.core.MarketContext existingContext) {
         int baseStrength;
-        
-        // 获取精确的ADX值用于细分判断
+
+        // 获取精确的ADX值用于细分判断（优先复用已有context，避免重复拉数据）
         try {
-            com.ltp.peter.augtrade.strategy.core.MarketContext context = 
-                    strategyOrchestrator.getMarketContext(bybitSymbol, 100);
-            Double adxValue = context != null ? context.getIndicator("ADX") : null;
+            Double adxValue = existingContext != null ? existingContext.getIndicator("ADX") : null;
             
             if (adxValue != null) {
                 // 🔥 细分ADX区间，提供更精细的门槛控制

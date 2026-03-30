@@ -38,6 +38,9 @@ public class TradingStrategyFactory {
     
     @Autowired
     private com.ltp.peter.augtrade.strategy.core.StrategyOrchestrator strategyOrchestrator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.strategy.core.SRRejectionScalpingStrategy srRejectionScalpingStrategy;
     
     /**
      * 策略信号枚举（统一所有策略的返回类型）
@@ -75,7 +78,11 @@ public class TradingStrategyFactory {
                 case "composite":
                     signal = executeComposite(symbol);
                     break;
-                
+
+                case "sr_rejection":
+                    signal = executeSRRejection(symbol);
+                    break;
+
                 default:
                     log.warn("⚠️ 未知策略: {}, 使用默认策略 balanced-aggressive", activeStrategy);
                     signal = executeBalancedAggressive(symbol);
@@ -185,6 +192,29 @@ public class TradingStrategyFactory {
     }
     
     /**
+     * 执行 SR 拒绝策略
+     */
+    private Signal executeSRRejection(String symbol) {
+        log.info("🔷 执行【SR拒绝策略】");
+
+        com.ltp.peter.augtrade.strategy.signal.TradingSignal result =
+                strategyOrchestrator.generateSignalWithStrategy(symbol, srRejectionScalpingStrategy);
+
+        if (result.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+            log.info("✅ SR拒绝策略 → 买入信号 (强度: {}, 得分: {})",
+                    result.getStrength(), result.getScore());
+            return Signal.BUY;
+        } else if (result.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
+            log.info("✅ SR拒绝策略 → 卖出信号 (强度: {}, 得分: {})",
+                    result.getStrength(), result.getScore());
+            return Signal.SELL;
+        } else {
+            log.info("⏸️ SR拒绝策略 → 观望");
+            return Signal.HOLD;
+        }
+    }
+
+    /**
      * 获取当前激活的策略名称
      * 
      * @return 策略名称
@@ -221,7 +251,10 @@ public class TradingStrategyFactory {
             
             case "composite":
                 return "组合策略 - 多个子策略投票，适合所有市场";
-            
+
+            case "sr_rejection":
+                return "SR拒绝策略 - 支撑/阻力位价格拒绝 + StochRSI确认，适合震荡市场";
+
             default:
                 return "未知策略: " + activeStrategy;
         }
