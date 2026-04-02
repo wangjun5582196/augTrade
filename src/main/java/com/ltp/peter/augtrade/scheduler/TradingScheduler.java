@@ -24,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.LocalDateTime;
 
@@ -1482,6 +1483,12 @@ public class TradingScheduler {
      */
     @Scheduled(cron = "0 */5 * * * ?")  // 每30分钟执行一次（如 10:00, 10:30, 11:00...）
     public void sendPeriodicReport() {
+        //如果是周6或者周日，不发送报告
+        if (LocalDateTime.now().getDayOfWeek() == DayOfWeek.SATURDAY || LocalDateTime.now().getDayOfWeek() == DayOfWeek.SUNDAY) {
+            return;
+        }
+
+
         if (!paperTrading) {
             return; // 只在模拟交易模式下发送
         }
