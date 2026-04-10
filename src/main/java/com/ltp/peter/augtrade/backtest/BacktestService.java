@@ -1512,10 +1512,15 @@ public class BacktestService {
                             .timestamp(System.currentTimeMillis())
                             .build();
 
-            // SR_REJECTION 策略只需要 KeyLevels（ATR 由策略内部自行计算）
+            // KeyLevels（S/R 关键位）
             com.ltp.peter.augtrade.indicator.KeyLevelCalculator.KeyLevelResult keyLevels =
                     keyLevelCalculator.calculate(reversedKlines);
             if (keyLevels != null) context.addIndicator("KeyLevels", keyLevels);
+
+            // EMATrend（1H 趋势软过滤所需，EMA20/EMA50 on 5m ≈ 1.7h/4.2h）
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend emaTrend =
+                    emaCalculator.calculateTrend(reversedKlines, 20, 50);
+            if (emaTrend != null) context.addIndicator("EMATrend", emaTrend);
 
             return srRejectionScalpingStrategy.generateSignal(context);
 

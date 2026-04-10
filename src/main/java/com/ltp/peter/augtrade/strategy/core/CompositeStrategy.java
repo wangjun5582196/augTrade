@@ -94,7 +94,10 @@ public class CompositeStrategy implements Strategy {
             return hold("数据不足", 0, 0);
         }
 
+
+
         List<Kline> klines = context.getKlines();
+        //帮我将这个集合里面的数据按照时间顺序排序
         double currentPrice = context.getCurrentPrice().doubleValue();
 
         // ══════════════════════════════════════════════════════

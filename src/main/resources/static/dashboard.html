@@ -588,11 +588,6 @@
             </div>
         </div>
 
-        <!-- 🔥 趋势判断面板 - 最醒目位置 -->
-        <div id="trendPanel" class="card" style="margin-bottom: 20px; overflow: hidden;">
-            <div id="trendContent" class="loading">加载趋势数据中...</div>
-        </div>
-
         <!-- 🔥 大趋势多时间框架面板 -->
         <div id="macroTrendPanel" class="card" style="margin-bottom: 20px; overflow: hidden;">
             <div id="macroTrendContent" class="loading">加载大趋势数据中...</div>
@@ -714,7 +709,6 @@
                 loadDailyProfitLineChart(),
                 loadTodayPieChart(),
                 // 🔥 趋势判断
-                loadTrendAnalysis(),
                 loadMacroTrend(),
                 // 🔥 P0核心功能
                 loadCurrentSignal(),
@@ -787,123 +781,6 @@
                 document.getElementById('yearReturn').textContent = '--';
                 document.getElementById('monthReturn').textContent = '--';
                 document.getElementById('weekReturn').textContent = '--';
-            }
-        }
-
-        // 🔥 趋势判断面板
-        async function loadTrendAnalysis() {
-            const container = document.getElementById('trendContent');
-            
-            try {
-                const response = await fetch('/api/dashboard/trend-analysis');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const strength = data.trendStrength || 0;
-                    const color = data.trendColor || '#999';
-                    
-                    // 多空力量条
-                    const bullWidth = data.bullScore > 0 || data.bearScore > 0 
-                        ? Math.round(data.bullScore / (data.bullScore + data.bearScore) * 100) 
-                        : 50;
-                    const bearWidth = 100 - bullWidth;
-                    
-                    let html = `
-                        <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
-                            <!-- 左侧：大趋势图标+标签 -->
-                            <div style="text-align: center; min-width: 140px;">
-                                <div style="font-size: 48px; line-height: 1;">${data.trendEmoji}</div>
-                                <div style="font-size: 24px; font-weight: 900; color: ${color}; margin-top: 5px;">
-                                    ${data.trendLabel}
-                                </div>
-                                <div style="font-size: 13px; color: #666; margin-top: 2px;">
-                                    趋势强度: <strong style="color: ${color};">${strength}%</strong>
-                                </div>
-                            </div>
-                            
-                            <!-- 中间：趋势强度条+多空力量 -->
-                            <div style="flex: 1; min-width: 250px;">
-                                <!-- 趋势强度进度条 -->
-                                <div style="margin-bottom: 12px;">
-                                    <div style="font-size: 12px; color: #666; margin-bottom: 4px;">趋势强度</div>
-                                    <div style="background: #e5e7eb; border-radius: 10px; height: 14px; overflow: hidden;">
-                                        <div style="background: ${color}; height: 100%; width: ${strength}%; border-radius: 10px; transition: width 0.5s ease;"></div>
-                                    </div>
-                                </div>
-                                
-                                <!-- 多空力量对比 -->
-                                <div style="margin-bottom: 12px;">
-                                    <div style="display: flex; justify-content: space-between; font-size: 12px; color: #666; margin-bottom: 4px;">
-                                        <span>🐂 多头 ${data.bullScore}分</span>
-                                        <span>🐻 空头 ${data.bearScore}分</span>
-                                    </div>
-                                    <div style="display: flex; border-radius: 10px; overflow: hidden; height: 14px;">
-                                        <div style="background: #10b981; width: ${bullWidth}%; transition: width 0.5s ease;"></div>
-                                        <div style="background: #ef4444; width: ${bearWidth}%; transition: width 0.5s ease;"></div>
-                                    </div>
-                                </div>
-                                
-                                <!-- 交易建议 -->
-                                <div style="background: #f8f9fa; border-radius: 8px; padding: 10px; border-left: 4px solid ${color};">
-                                    <div style="font-size: 12px; color: #666; margin-bottom: 3px;">💡 交易建议</div>
-                                    <div style="font-size: 13px; color: #333; font-weight: 500;">${data.suggestion}</div>
-                                </div>
-                            </div>
-                            
-                            <!-- 右侧：关键指标 -->
-                            <div style="min-width: 280px;">
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                    `;
-                    
-                    // 展示关键指标
-                    if (data.indicators) {
-                        const keyIndicators = ['EMA方向', 'ADX级别', 'WR区域', '布林带位置', '当前价格', 'EMA间距'];
-                        keyIndicators.forEach(key => {
-                            const val = data.indicators[key];
-                            if (val) {
-                                html += `
-                                    <div style="background: #f8f9fa; padding: 8px 10px; border-radius: 6px;">
-                                        <div style="font-size: 11px; color: #999;">${key}</div>
-                                        <div style="font-size: 13px; font-weight: 600; color: #333;">${val}</div>
-                                    </div>
-                                `;
-                            }
-                        });
-                    }
-                    
-                    html += `
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- 判断依据 -->
-                        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0;">
-                            <div style="font-size: 12px; color: #999; margin-bottom: 6px;">📋 判断依据:</div>
-                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    `;
-                    
-                    if (data.reasons && data.reasons.length > 0) {
-                        data.reasons.forEach(reason => {
-                            html += `<span style="background: #f3f4f6; padding: 4px 10px; border-radius: 12px; font-size: 12px; color: #555;">${reason}</span>`;
-                        });
-                    }
-                    
-                    html += `
-                            </div>
-                        </div>
-                    `;
-                    
-                    container.innerHTML = html;
-                    
-                    // 更新面板边框颜色
-                    document.getElementById('trendPanel').style.borderLeft = `5px solid ${color}`;
-                    
-                } else {
-                    container.innerHTML = '<div class="empty-state">无法获取趋势数据</div>';
-                }
-            } catch (error) {
-                console.error('加载趋势分析失败:', error);
-                container.innerHTML = '<div class="empty-state">加载趋势数据失败</div>';
             }
         }
 
