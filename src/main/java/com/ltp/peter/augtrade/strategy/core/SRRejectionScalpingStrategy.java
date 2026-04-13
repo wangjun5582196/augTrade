@@ -87,15 +87,17 @@ public class SRRejectionScalpingStrategy implements Strategy {
     /**
      * 拒绝K线最小振幅（相对ATR）
      * 回测实证：振幅<0.5×ATR的K线是噪音蜡烛，拒绝信号不可靠
+     * minRange 使用 min(ATR7, ATR14)：ATR7 响应更快，极端行情消退后
+     * 门槛随之自动下降，避免高波动遗留值导致后续低波动期系统性沉默。
      */
     private static final double MIN_CANDLE_RANGE_ATR = 0.5;
 
     /**
      * 噪音时段过滤（UTC小时）
-     * 回测实证：UTC 5-8、11-14点均盈亏为负（-$20~-$59/笔）
-     * 对应欧洲开盘前低流动性 + 美欧重叠高噪音时段
+     * 回测实证：UTC 5-8点盈亏为负（-$20~-$59/笔），对应欧洲开盘前低流动性（北京 13:00-16:00）
+     * UTC 11-14（北京 19:00-22:00）= 美盘开盘波动最大时段，已解锁不再过滤
      */
-    private static final int[] NOISE_HOURS_UTC = {5, 6, 7, 8, 11, 12, 13, 14};
+    private static final int[] NOISE_HOURS_UTC = {5, 6, 7, 8};
 
     @Autowired
     private ATRCalculator atrCalculator;
@@ -329,8 +331,16 @@ public class SRRejectionScalpingStrategy implements Strategy {
      */
     private RejectionCandle findBearishRejection(List<Kline> klines, double resistanceLevel, int lookback) {
         double touchTolerance = resistanceLevel * TOUCH_THRESHOLD_PCT;
-        Double atr = atrCalculator.calculate(klines, 14);
-        double minRange = (atr != null) ? atr * MIN_CANDLE_RANGE_ATR : 0.3;
+        Double atr14 = atrCalculator.calculate(klines, 14);
+        Double atr7  = atrCalculator.calculate(klines, 7);
+        // 取 min(ATR7, ATR14)：ATR7 响应当前市场节奏更快，避免极端行情遗留值虚高门槛
+        double atr = (atr14 != null && atr7 != null) ? Math.min(atr14, atr7)
+                   : (atr14 != null ? atr14 : (atr7 != null ? atr7 : null));
+        double minRange = (atr > 0) ? atr * MIN_CANDLE_RANGE_ATR : 0.3;
+        log.debug("[SRRejection] 做空 minRange={} (ATR7={} ATR14={})",
+                String.format("%.2f", minRange),
+                atr7 != null ? String.format("%.2f", atr7) : "N/A",
+                atr14 != null ? String.format("%.2f", atr14) : "N/A");
 
         for (int i = 0; i < Math.min(lookback, klines.size()); i++) {
             Kline k = klines.get(i);
@@ -379,8 +389,15 @@ public class SRRejectionScalpingStrategy implements Strategy {
      */
     private RejectionCandle findBullishRejection(List<Kline> klines, double supportLevel, int lookback) {
         double touchTolerance = supportLevel * TOUCH_THRESHOLD_PCT;
-        Double atr = atrCalculator.calculate(klines, 14);
-        double minRange = (atr != null) ? atr * MIN_CANDLE_RANGE_ATR : 0.3;
+        Double atr14 = atrCalculator.calculate(klines, 14);
+        Double atr7  = atrCalculator.calculate(klines, 7);
+        double atr = (atr14 != null && atr7 != null) ? Math.min(atr14, atr7)
+                   : (atr14 != null ? atr14 : (atr7 != null ? atr7 : null));
+        double minRange = (atr > 0) ? atr * MIN_CANDLE_RANGE_ATR : 0.3;
+        log.debug("[SRRejection] 做多 minRange={} (ATR7={} ATR14={})",
+                String.format("%.2f", minRange),
+                atr7 != null ? String.format("%.2f", atr7) : "N/A",
+                atr14 != null ? String.format("%.2f", atr14) : "N/A");
 
         for (int i = 0; i < Math.min(lookback, klines.size()); i++) {
             Kline k = klines.get(i);
