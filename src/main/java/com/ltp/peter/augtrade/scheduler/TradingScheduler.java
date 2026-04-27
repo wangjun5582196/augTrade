@@ -271,7 +271,52 @@ public class TradingScheduler {
             log.warn("[Startup] 补缺执行失败: {}", e.getMessage());
         }
     }
-    
+
+    /**
+     * 运行中缺口检测与修复 - 每10分钟执行一次
+     *
+     * 解决问题：
+     *   1. 调度器单线程时，collectMarketData 被阻塞超过15分钟 → limit=3 覆盖不了 → 丢数据
+     *   2. OKX / 币安 API 同时故障超过15分钟 → 数据永久丢失
+     *
+     * 策略：
+     *   - 查询数据库最新K线时间戳
+     *   - 若距当前时间 >= 15分钟（3根K线），立即触发OKX全量补缺
+     *   - 与 repairKlineGapsOnStartup 互补：启动补历史空白，本任务修运行中缺口
+     */
+    @Scheduled(fixedRate = 600000) // 每10分钟检测一次
+    public void detectAndRepairKlineGap() {
+        if (!StartupDataLoader.isDataLoaded()) {
+            return;
+        }
+        try {
+            String targetSymbol = binanceEnabled ? binanceFuturesSymbol : "XAUUSDT";
+            java.util.List<com.ltp.peter.augtrade.entity.Kline> recent =
+                    marketDataService.getLatestKlines(targetSymbol, "5m", 1);
+            if (recent == null || recent.isEmpty()) return;
+
+            long latestTs = recent.get(0).getTimestamp()
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant().toEpochMilli();
+            long nowTs = System.currentTimeMillis();
+            long gapMinutes = (nowTs - latestTs) / (60 * 1000L);
+
+            if (gapMinutes >= 15) {
+                log.warn("[GapRepair] ⚠️ 检测到K线缺口：最新K线距今 {} 分钟，开始OKX补缺...", gapMinutes);
+                int repaired = okxKlineDataFetcher.repairGap(targetSymbol, latestTs, 0);
+                if (repaired > 0) {
+                    log.info("[GapRepair] ✅ 补缺完成，新增 {} 根K线", repaired);
+                } else if (repaired == 0) {
+                    log.info("[GapRepair] ℹ️ OKX暂无新K线（市场可能处于收盘/维护时段）");
+                } else {
+                    log.warn("[GapRepair] ❌ OKX补缺失败，将在下次检测时重试");
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[GapRepair] 缺口检测执行失败: {}", e.getMessage());
+        }
+    }
+
     /**
      * 🔥 P0修复-20260316：采集币安黄金K线数据（从API获取真实OHLCV）
      *
@@ -1494,13 +1539,18 @@ public class TradingScheduler {
         }
         
         try {
+            // 无持仓时不发送报告
+            boolean hasPosition = paperTradingService.hasOpenPosition();
+            if (!hasPosition) {
+                return;
+            }
+
             log.info("========================================");
             log.info("【定期报告】开始生成飞书报告");
-            
+
             // 1. 检查是否有持仓
-            boolean hasPosition = paperTradingService.hasOpenPosition();
             String positionInfo = "";
-            
+
             if (hasPosition) {
                 com.ltp.peter.augtrade.entity.PaperPosition position = paperTradingService.getCurrentPosition();
                 if (position != null) {

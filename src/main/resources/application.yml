@@ -6,6 +6,11 @@ server:
 spring:
   application:
     name: aug-trade
+
+  task:
+    scheduling:
+      pool:
+        size: 5   # 独立线程池：数据采集、策略执行、持仓监控不再互相阻塞
   
   # MySQL数据源配置（使用HikariCP连接池）
   datasource:

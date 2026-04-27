@@ -32,10 +32,10 @@ import java.util.stream.Collectors;
 public class KeyLevelCalculator {
 
     /** 判定"在关键位附近"的价格距离阈值（百分比）*/
-    private static final double AT_LEVEL_THRESHOLD_PCT = 0.35;
+    private static final double AT_LEVEL_THRESHOLD_PCT = 0.45;
 
-    /** 多小时摆动点的左右各看 N 根 K 线（12根 = 1小时窗口）*/
-    private static final int SWING_LOOKBACK = 12;
+    /** 多小时摆动点的左右各看 N 根 K 线（8根 = 40分钟窗口）*/
+    private static final int SWING_LOOKBACK = 8;
 
     /** 最多向前检索多少根 K 线来找摆动点 */
     private static final int SWING_SEARCH_LIMIT = 200;
