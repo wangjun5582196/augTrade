@@ -55,8 +55,8 @@ public class CompositeStrategy implements Strategy {
     private static final String STRATEGY_NAME = "Composite";
     private static final int STRATEGY_WEIGHT = 10;
 
-    // Layer 2 门槛
-    private static final double ADX_THRESHOLD = 30.0;
+    // Layer 2 门槛（下限25：ADX<25区间历史胜率84.6%，之前被过滤掉了好信号）
+    private static final double ADX_THRESHOLD = 25.0;
 
     // Layer 3 触发门槛
     // 日内短线修改：WR做多门槛从 -80 放宽到 -60
@@ -165,6 +165,12 @@ public class CompositeStrategy implements Strategy {
             return hold(String.format("趋势太弱ADX=%.1f(需≥%.0f%s)",
                     adx != null ? adx : 0, effectiveAdxThreshold,
                     isHighNoiseSession ? ",高噪音时段" : ""), 0, 0);
+        }
+        // ADX 上限：ADX>70 属于异常极端值，价格在单向加速突破，S/R 关键位必然失效
+        if (adx > 70.0) {
+            log.info("[Composite] Layer2 ❌ ADX={} > 70 极端趋势，S/R失效，拒绝入场",
+                    String.format("%.1f", adx));
+            return hold(String.format("ADX=%.1f极端异常(>70)，S/R失效", adx), 0, 0);
         }
 
         SupertrendCalculator.SupertrendResult st = context.getIndicator("Supertrend");
@@ -420,10 +426,24 @@ public class CompositeStrategy implements Strategy {
         KeyLevelCalculator.KeyLevel relevantLevel = isBuy ? levels.getNearestSupport() : levels.getNearestResistance();
         if (relevantLevel != null) {
             int sourceCount = relevantLevel.getSource().split("\\+").length;
-            if (sourceCount < 2) {
-                log.info("[Composite] ⛔ 关键位仅有单一来源({})，拒绝入场（历史胜率9%）",
-                        relevantLevel.getSource());
-                return hold("单一关键位来源(" + relevantLevel.getSource() + ")，置信度不足", 0, 0);
+            // 做空来源要求随 ADX 分级：ADX 越高动量越强，S/R 越容易被突破，需要更多来源确认
+            //   ADX < 35 → 3 源（基础要求）
+            //   ADX 35-70 → 4 源（高趋势强度时需要更强关键位）
+            //   ADX > 70 → 已在 Layer 2 拦截
+            // 做多保持 ≥2（回调做多更难等到深超卖，不宜过度限制）
+            int minSources;
+            if (isBuy) {
+                minSources = 2;
+            } else if (adx != null && adx >= 35.0) {
+                minSources = 4;
+            } else {
+                minSources = 3;
+            }
+            if (sourceCount < minSources) {
+                log.info("[Composite] ⛔ {}位来源数{}不足{}，拒绝入场",
+                        isBuy ? "支撑" : "阻力", sourceCount, minSources);
+                return hold(String.format("%s位来源数%d不足%d，置信度不足",
+                        isBuy ? "支撑" : "阻力", sourceCount, minSources), 0, 0);
             }
         }
 

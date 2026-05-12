@@ -57,16 +57,37 @@ public class SRRejectionScalpingStrategy implements Strategy {
     private static final double TOUCH_THRESHOLD_PCT = 0.0005;
 
     /**
-     * 影线/振幅最小比例（提高至 50%）
+     * 影线/振幅最小比例（提高至 55%）
      * 回测实证：35% 阈值捞到大量劣质信号（胜率14-18%），50% 后信号更纯粹
+     * 高质量信号特征：影线比 ≥52%（来自 PnL>$400 的大赢单统计），55% 为更严格的质量门槛
      */
-    private static final double WICK_RATIO_THRESHOLD = 0.50;
+    private static final double WICK_RATIO_THRESHOLD = 0.55;
 
     /**
      * 往前看 K 线数（从3根缩减至2根）
      * 回测实证：lookback=3 导致大量"过期拒绝"被重复触发
      */
     private static final int REJECTION_LOOKBACK = 2;
+
+    /**
+     * 是否要求"确认K线"过滤（软过滤：只过滤拒绝信号已被突破的情形）
+     *
+     * 当拒绝K线为 klines[1]（非最新）时：
+     *   做空：klines[0] 不能收盘高于阻力位（否则拒绝失效）
+     *   做多：klines[0] 不能收盘低于支撑位（否则拒绝失效）
+     */
+    private static final boolean REQUIRE_CONFIRM_CANDLE = true;
+
+    /**
+     * 是否要求关键位为高质量合流区（减少单来源噪音位）
+     *
+     * 高质量 = STRONG 级别（PDH/PDL、$50 整数关口）
+     *        OR 多来源合流（source 含 "+"，如 "Round25+SwingHigh_3"）
+     *
+     * 回测数据支撑：单一摆动点或单一 $25 关口可靠性低（与 CompositeStrategy 的 sourceCount≥2 对齐）。
+     * 代价：减少约 30-40% 的交易次数，但胜率显著提升。
+     */
+    private static final boolean REQUIRE_HIGH_QUALITY_LEVEL = true;
 
     /**
      * SL 缓冲：ATR 倍数（从0.3提高至0.8）
@@ -93,11 +114,15 @@ public class SRRejectionScalpingStrategy implements Strategy {
     private static final double MIN_CANDLE_RANGE_ATR = 0.5;
 
     /**
-     * 噪音时段过滤（UTC小时）
-     * 回测实证：UTC 5-8点盈亏为负（-$20~-$59/笔），对应欧洲开盘前低流动性（北京 13:00-16:00）
-     * UTC 11-14（北京 19:00-22:00）= 美盘开盘波动最大时段，已解锁不再过滤
+     * 噪音时段过滤（UTC小时，时间戳以北京时间存储，UTC = 北京时间 - 8）
+     *
+     * 回测实证（全量数据 2025-12-11 ~ 2026-05-10）：
+     *   UTC 1  (北京 09:00) = 中国金市开盘噪音 → 16.7%胜率，-$2146 ← 最差
+     *   UTC 5-8 (北京 13-16) = 欧洲开盘前低流动性 → 已过滤
+     *   UTC 10 (北京 18:00) = 伦敦中段震荡 → 23.1%胜率，-$1010
+     *   UTC 13 (北京 21:00) = 美欧重叠，方向最混乱 → 19.0%胜率，-$1365
      */
-    private static final int[] NOISE_HOURS_UTC = {5, 6, 7, 8};
+    private static final int[] NOISE_HOURS_UTC = {1, 5, 6, 7, 8, 10, 13};
 
     @Autowired
     private ATRCalculator atrCalculator;
@@ -156,20 +181,28 @@ public class SRRejectionScalpingStrategy implements Strategy {
             }
         }
 
+        // ── 宏观趋势感知（7d 价格变化，硬性提高逆势门槛）──
+        // 在牛市中做空需要更极端的 StochRSI 超买确认，防止在上涨趋势中频繁被轧空
+        double change7d = computeMacroChange7d(klines);
+        boolean macroBull = change7d > 2.0;   // 7天涨幅 > 2% 视为宏观牛市
+        boolean macroBear = change7d < -2.0;   // 7天跌幅 > 2% 视为宏观熊市
+
         // ── 1小时趋势感知（软过滤，不硬封锁方向）──
-        // 使用 EMATrend（EMA20/EMA50 on 5m ≈ 1.7h/4.2h）作为 1H 趋势代理。
-        // 逻辑：S/R 拒绝策略两个方向都可以做，但逆 1H 趋势时
-        //   要求更深的 StochRSI 极值确认（提高门槛 +10 点），而非直接封锁。
         EMACalculator.EMATrend emaTrend = context.getIndicator("EMATrend");
         boolean emaUp   = emaTrend != null && emaTrend.isUpTrend();
         boolean emaDown = emaTrend != null && emaTrend.isDownTrend();
 
-        // 逆 1H 趋势时，StochRSI 门槛提高 10 点（顺势可用默认阈值）
-        // 逆势做空（EMA 向上）：K 须 > 85；逆势做多（EMA 向下）：K 须 < 15
-        double shortStochThreshold = emaUp   ? STOCH_OVERBOUGHT_THRESHOLD + 10.0 : STOCH_OVERBOUGHT_THRESHOLD;
-        double longStochThreshold  = emaDown ? STOCH_OVERSOLD_THRESHOLD   - 10.0 : STOCH_OVERSOLD_THRESHOLD;
+        // StochRSI 门槛叠加规则（取最严格值）：
+        //   宏观牛市做空：基础75 + EMA向上+10 + 宏观牛市+10 → 最高95
+        //   宏观熊市做多：基础25 - EMA向下-10 - 宏观熊市-10 → 最低5
+        double shortAdj = (emaUp ? 10.0 : 0.0) + (macroBull ? 10.0 : 0.0);
+        double longAdj  = (emaDown ? -10.0 : 0.0) + (macroBear ? -10.0 : 0.0);
+        double shortStochThreshold = Math.min(95.0, STOCH_OVERBOUGHT_THRESHOLD + shortAdj);
+        double longStochThreshold  = Math.max(5.0,  STOCH_OVERSOLD_THRESHOLD   + longAdj);
 
-        log.info("[SRRejection] 1H趋势(EMA): {} | 做空StochRSI门槛={} 做多门槛={}",
+        log.info("[SRRejection] 宏观7d={}% {} | EMA={} | 做空StochRSI门槛={} 做多门槛={}",
+                String.format("%.2f", change7d),
+                macroBull ? "BULL" : (macroBear ? "BEAR" : "NEUTRAL"),
                 emaUp ? "UP" : (emaDown ? "DOWN" : "FLAT"),
                 String.format("%.0f", shortStochThreshold),
                 String.format("%.0f", longStochThreshold));
@@ -185,13 +218,38 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 stochRSI.getDescription());
 
         // ──────────────────────────────────────────────────────
-        // 做空：阻力位 + 上影线拒绝 + StochRSI 超买确认
+        // 做空：阻力位 + 上影线拒绝 + 确认K线 + StochRSI 超买确认
         // 逆 1H 趋势（EMA向上）时门槛自动提高至 >85
         // ──────────────────────────────────────────────────────
         KeyLevelCalculator.KeyLevel resistance = levels.getNearestResistance();
         if (resistance != null) {
+            // 关键位质量过滤：只在 STRONG 或多来源合流位开仓
+            if (REQUIRE_HIGH_QUALITY_LEVEL && !isHighQualityLevel(resistance)) {
+                log.info("[SRRejection] 做空阻力位质量不足 ({} / {})，跳过",
+                        resistance.getStrength(), resistance.getSource());
+                resistance = null;
+            }
+        }
+        if (resistance != null) {
             RejectionCandle bearish = findBearishRejection(klines, resistance.getPrice(), REJECTION_LOOKBACK);
             if (bearish.found) {
+                // 确认K线过滤：拒绝K线为 klines[1]（非最新根）时，要求 klines[0] 没有突破阻力位上方
+                // 软过滤：阻力位若被 klines[0] 突破收盘，说明拒绝信号已失效，不入场
+                boolean confirmOk = true;
+                if (REQUIRE_CONFIRM_CANDLE && bearish.klineIndex == 1 && klines.size() > 1) {
+                    Kline confirmK = klines.get(0);
+                    double confirmClose = confirmK.getClosePrice().doubleValue();
+                    double resistPrice  = resistance.getPrice();
+                    // klines[0] 收盘高于阻力位 = 拒绝失效，假突破
+                    if (confirmClose > resistPrice) {
+                        confirmOk = false;
+                        log.info("[SRRejection] 做空被确认K线过滤（klines[0] close={} > 阻力{}，拒绝失效）",
+                                String.format("%.2f", confirmClose),
+                                String.format("%.2f", resistPrice));
+                    }
+                }
+
+                if (confirmOk) {
                     // StochRSI 动态门槛：顺势 >75，逆 1H 趋势 >85
                     if (stochRSI.getK() < shortStochThreshold) {
                         log.info("[SRRejection] 做空被 StochRSI 过滤 K={} < {}（{}）",
@@ -199,8 +257,6 @@ public class SRRejectionScalpingStrategy implements Strategy {
                                 String.format("%.0f", shortStochThreshold),
                                 emaUp ? "逆1H上升趋势，门槛提高至85" : "动量未超买");
                     } else {
-                        // SL 放在 max(wickExtreme, resistanceLevel) 上方 + ATR 缓冲
-                        // 修复：原来只用 wickExtreme，当 K 线高点低于阻力位时 SL 极度紧张
                         double slBase = Math.max(bearish.wickExtreme, resistance.getPrice());
                         double sl = slBase + atr * SL_ATR_BUFFER;
                         double risk = sl - currentPrice;
@@ -236,16 +292,42 @@ public class SRRejectionScalpingStrategy implements Strategy {
                         }
                     }
                 }
+            }
         }
 
         // ──────────────────────────────────────────────────────
-        // 做多：支撑位 + 下影线拒绝 + StochRSI 超卖确认
+        // 做多：支撑位 + 下影线拒绝 + 确认K线 + StochRSI 超卖确认
         // 逆 1H 趋势（EMA向下）时门槛自动提高至 <15
         // ──────────────────────────────────────────────────────
         KeyLevelCalculator.KeyLevel support = levels.getNearestSupport();
         if (support != null) {
+            // 关键位质量过滤：只在 STRONG 或多来源合流位开仓
+            if (REQUIRE_HIGH_QUALITY_LEVEL && !isHighQualityLevel(support)) {
+                log.info("[SRRejection] 做多支撑位质量不足 ({} / {})，跳过",
+                        support.getStrength(), support.getSource());
+                support = null;
+            }
+        }
+        if (support != null) {
             RejectionCandle bullish = findBullishRejection(klines, support.getPrice(), REJECTION_LOOKBACK);
             if (bullish.found) {
+                // 确认K线过滤：拒绝K线为 klines[1]（非最新根）时，要求 klines[0] 没有跌破支撑位
+                // 软过滤：支撑位若被 klines[0] 跌破收盘，说明拒绝信号已失效，不入场
+                boolean confirmOk = true;
+                if (REQUIRE_CONFIRM_CANDLE && bullish.klineIndex == 1 && klines.size() > 1) {
+                    Kline confirmK = klines.get(0);
+                    double confirmClose = confirmK.getClosePrice().doubleValue();
+                    double supportPrice = support.getPrice();
+                    // klines[0] 收盘低于支撑位 = 拒绝失效，假支撑
+                    if (confirmClose < supportPrice) {
+                        confirmOk = false;
+                        log.info("[SRRejection] 做多被确认K线过滤（klines[0] close={} < 支撑{}，拒绝失效）",
+                                String.format("%.2f", confirmClose),
+                                String.format("%.2f", supportPrice));
+                    }
+                }
+
+                if (confirmOk) {
                     // StochRSI 动态门槛：顺势 <25，逆 1H 趋势 <15
                     if (stochRSI.getK() > longStochThreshold) {
                         log.info("[SRRejection] 做多被 StochRSI 过滤 K={} > {}（{}）",
@@ -253,7 +335,6 @@ public class SRRejectionScalpingStrategy implements Strategy {
                                 String.format("%.0f", longStochThreshold),
                                 emaDown ? "逆1H下降趋势，门槛降低至15" : "动量未超卖");
                     } else {
-                        // SL 放在 min(wickExtreme, supportLevel) 下方 + ATR 缓冲
                         double slBase = Math.min(bullish.wickExtreme, support.getPrice());
                         double sl = slBase - atr * SL_ATR_BUFFER;
                         double risk = currentPrice - sl;
@@ -289,6 +370,7 @@ public class SRRejectionScalpingStrategy implements Strategy {
                         }
                     }
                 }
+            }
         }
 
         log.info("[SRRejection] HOLD | 无有效 S/R 拒绝信号 (支撑距{}, 阻力距{})",
@@ -536,6 +618,32 @@ public class SRRejectionScalpingStrategy implements Strategy {
     // ─────────────────────────────────────────────────────────
     // 工具方法
     // ─────────────────────────────────────────────────────────
+
+    /**
+     * 判断关键位是否为高质量合流区
+     *
+     * 高质量条件（满足任一即可）：
+     *   1. STRONG 级别（PDH/PDL、$50 整数关口）
+     *   2. 多来源合流（source 含 "+"，如 "Round25+SwingHigh"）
+     */
+    private boolean isHighQualityLevel(KeyLevelCalculator.KeyLevel level) {
+        if (level == null) return false;
+        if (level.getStrength() == KeyLevelCalculator.LevelStrength.STRONG) return true;
+        String src = level.getSource();
+        return src != null && src.contains("+");
+    }
+
+    /**
+     * 计算 7 天价格变化百分比（用于宏观趋势判断）
+     * klines 为倒序列表（最新在前），5m K线 7天 = 2016 根
+     */
+    private double computeMacroChange7d(List<Kline> klines) {
+        int lookback = Math.min(2016, klines.size() - 1);
+        if (lookback < 288) return 0.0;
+        double current = klines.get(0).getClosePrice().doubleValue();
+        double past    = klines.get(lookback).getClosePrice().doubleValue();
+        return past > 0 ? (current - past) / past * 100.0 : 0.0;
+    }
 
     private TradingSignal hold(MarketContext context, String reason) {
         return TradingSignal.builder()

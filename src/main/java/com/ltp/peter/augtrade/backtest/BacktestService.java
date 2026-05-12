@@ -1494,8 +1494,8 @@ public class BacktestService {
     private com.ltp.peter.augtrade.strategy.signal.TradingSignal evaluateSRRejectionSignal(
             String symbol, List<Kline> allKlines, int currentIndex) {
         try {
-            // 取最近 300 根 K 线（覆盖 PDH/PDL 和摆动高低点），倒序（最新在前）
-            int windowSize = Math.min(300, currentIndex + 1);
+            // 取最近 2016 根 K 线（7d 宏观趋势计算需要 2016 根；也覆盖 PDH/PDL 和摆动高低点）
+            int windowSize = Math.min(2016, currentIndex + 1);
             List<Kline> reversedKlines = new ArrayList<>(windowSize);
             for (int j = currentIndex; j >= 0 && j > currentIndex - windowSize; j--) {
                 reversedKlines.add(allKlines.get(j));
