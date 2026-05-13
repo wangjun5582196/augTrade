@@ -7,6 +7,11 @@ spring:
   application:
     name: aug-trade
 
+  web:
+    resources:
+      cache:
+        period: 0          # 禁用静态资源缓存，修改HTML/CSS立即生效
+
   task:
     scheduling:
       pool:
@@ -15,7 +20,7 @@ spring:
   # MySQL数据源配置（使用HikariCP连接池）
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/aug?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://127.0.0.1:3306/aug?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: 12345678
     

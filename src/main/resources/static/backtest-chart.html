@@ -426,6 +426,204 @@
             font-size: 13px;
         }
         .empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+
+        /* ═══ 视觉增强 ══════════════════════════════════════ */
+        :root {
+            --bg:       #080c14;
+            --surface:  #0f172a;
+            --panel:    #111827;
+            --border:   #1e2d45;
+            --border2:  #283d5e;
+            --text:     #e2e8f0;
+            --muted:    #64748b;
+            --green:    #22d3a0;
+            --red:      #f43f5e;
+            --blue:     #3b82f6;
+            --yellow:   #fbbf24;
+            --green-bg: rgba(34,211,160,0.09);
+            --red-bg:   rgba(244,63,94,0.09);
+            --blue-bg:  rgba(59,130,246,0.1);
+        }
+
+        .topbar {
+            background: linear-gradient(180deg, #0d1526 0%, var(--surface) 100%);
+            border-bottom-color: var(--border);
+        }
+
+        .topbar-symbol {
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 17px;
+        }
+
+        .back-btn {
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover {
+            background: var(--blue-bg);
+            border-color: var(--blue);
+            color: var(--blue);
+        }
+
+        .topbar-interval {
+            font-weight: 700;
+            border-radius: 6px;
+        }
+
+        .statsbar {
+            background: linear-gradient(180deg, #0a0f1e 0%, var(--surface) 100%);
+        }
+
+        .stat-item { transition: background 0.15s; }
+        .stat-item:hover { background: rgba(255,255,255,0.02); }
+
+        .trade-panel {
+            background: linear-gradient(180deg, #0d1526 0%, var(--surface) 100%);
+        }
+
+        .panel-header { background: rgba(255,255,255,0.015); }
+
+        .panel-title { font-size: 13px; font-weight: 700; letter-spacing: 0.3px; }
+
+        .filter-btn { border-radius: 6px; font-weight: 600; }
+
+        .filter-btn.active {
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            border-color: transparent;
+            box-shadow: 0 2px 10px rgba(59,130,246,0.4);
+            color: #fff;
+        }
+
+        .mini-card {
+            background: rgba(255,255,255,0.025);
+            border-radius: 8px;
+            transition: background 0.15s;
+        }
+
+        .mini-card:hover { background: rgba(255,255,255,0.045); }
+
+        .trade-item { transition: background 0.12s ease; }
+        .trade-item:hover { background: rgba(255,255,255,0.035) !important; }
+        .trade-item.selected {
+            background: rgba(59,130,246,0.07) !important;
+            box-shadow: inset 0 0 0 1px rgba(59,130,246,0.18);
+        }
+
+        .side-badge { border-radius: 5px; font-weight: 800; }
+        .exit-badge { border-radius: 5px; font-weight: 700; }
+
+        .ti-pnl { font-weight: 800; }
+
+        .legend {
+            background: rgba(8,12,20,0.92);
+            border-radius: 8px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: var(--border2);
+        }
+
+        .detail-reason {
+            background: rgba(255,255,255,0.02);
+            border-color: var(--border2);
+            border-radius: 8px;
+            line-height: 1.6;
+        }
+
+        .loading-overlay {
+            background: rgba(8,12,20,0.97);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        .loader { box-shadow: 0 0 20px rgba(59,130,246,0.25); }
+
+        /* ═══ 移动端响应式 (iPhone 13 / 390px) ════════════ */
+        @media (max-width: 768px) {
+            body {
+                height: auto;
+                min-height: 100vh;
+                overflow-y: auto;
+                overflow-x: hidden;
+            }
+            .topbar {
+                padding: 0 10px;
+                gap: 8px;
+                height: 46px;
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                flex-shrink: 0;
+            }
+            .topbar::-webkit-scrollbar { display: none; }
+            .topbar-hint { display: none; }
+            .topbar-id { display: none; }
+            .topbar-symbol { font-size: 14px; }
+            .topbar-strategy { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .statsbar {
+                height: auto;
+                padding: 6px 10px;
+                flex-wrap: wrap;
+                gap: 4px;
+                overflow-x: visible;
+            }
+            .stat-item {
+                padding: 4px 8px;
+                height: auto;
+                min-width: 0;
+                border-right: none;
+                background: var(--panel);
+                border-radius: 4px;
+                border: 1px solid var(--border);
+                flex-shrink: 0;
+            }
+            .s-label { font-size: 9px; }
+            .s-value { font-size: 12px; }
+            .main {
+                flex-direction: column;
+                overflow: visible;
+                flex: none;
+                height: auto;
+            }
+            .chart-area {
+                height: 45vh;
+                min-height: 260px;
+                flex: none;
+                overflow: hidden;
+            }
+            .trade-panel {
+                width: 100%;
+                height: 45vh;
+                min-height: 300px;
+                flex-shrink: 0;
+                border-left: none;
+                border-top: 1px solid var(--border);
+            }
+            .trade-detail-bar {
+                flex-wrap: wrap;
+                gap: 8px 14px;
+                padding: 10px 12px;
+                height: auto;
+            }
+            .detail-block { min-width: 70px; }
+            .detail-reason {
+                width: 100%;
+                flex: none;
+                min-width: 0;
+            }
+            .legend {
+                top: 6px;
+                left: 6px;
+                font-size: 9px;
+                padding: 5px 8px;
+            }
+            .legend-item { margin-bottom: 2px; }
+            .panel-header { padding: 10px 12px 8px; }
+            .mini-stats { padding: 8px 12px; }
+        }
     </style>
 </head>
 <body>

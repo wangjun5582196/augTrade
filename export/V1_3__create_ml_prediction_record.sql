@@ -1,0 +1,25 @@
+-- ML预测记录表
+CREATE TABLE IF NOT EXISTS ml_prediction_record (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    symbol VARCHAR(20) NOT NULL COMMENT '交易品种',
+    ml_prediction DECIMAL(10, 6) NOT NULL COMMENT 'ML预测值(0-1概率)',
+    predicted_signal VARCHAR(10) NOT NULL COMMENT '预测方向(BUY/SELL/HOLD)',
+    confidence DECIMAL(10, 6) NOT NULL COMMENT '置信度(0-1)',
+    williams_r DECIMAL(10, 4) COMMENT 'Williams %R值',
+    price_at_prediction DECIMAL(20, 6) NOT NULL COMMENT '预测时的价格',
+    trade_taken BOOLEAN DEFAULT FALSE COMMENT '是否开仓',
+    order_no VARCHAR(50) COMMENT '关联的订单号',
+    actual_result VARCHAR(20) DEFAULT 'PENDING' COMMENT '实际结果(PROFIT/LOSS/PENDING/NOT_TRADED)',
+    profit_loss DECIMAL(20, 6) COMMENT '实际盈亏',
+    is_correct BOOLEAN COMMENT '预测是否正确',
+    features_json TEXT COMMENT '特征值JSON',
+    remark VARCHAR(500) COMMENT '备注',
+    prediction_time DATETIME NOT NULL COMMENT '预测时间',
+    result_time DATETIME COMMENT '结果确认时间',
+    create_time DATETIME NOT NULL COMMENT '创建时间',
+    update_time DATETIME NOT NULL COMMENT '更新时间',
+    INDEX idx_symbol (symbol),
+    INDEX idx_prediction_time (prediction_time),
+    INDEX idx_order_no (order_no),
+    INDEX idx_actual_result (actual_result)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ML预测记录表';
