@@ -12,8 +12,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -90,9 +92,9 @@ public class SRRejectionScalpingStrategy implements Strategy {
     private static final boolean REQUIRE_HIGH_QUALITY_LEVEL = true;
 
     /**
-     * SL 缓冲：ATR 倍数（从0.3提高至0.8）
-     * 回测实证：持仓<30min的胜率仅14-27%，SL太紧被噪音震出
-     * 0.8×ATR 缓冲让仓位有足够空间，与持仓>30min的高胜率对齐
+     * SL 缓冲：ATR 倍数（0.8）
+     * 0.5×ATR 时：win rate=36.5%（SL偏紧被噪音震出）
+     * 0.8×ATR 时：win rate=39.8%（给持仓更多呼吸空间），净收益更高
      */
     private static final double SL_ATR_BUFFER = 0.8;
 
@@ -102,8 +104,8 @@ public class SRRejectionScalpingStrategy implements Strategy {
      */
     private static final double MIN_RR_RATIO = 2.0;
 
-    /** TP fallback 倍数（无明确对面 S/R 时用 2.5×ATR） */
-    private static final double TP_ATR_FALLBACK = 2.5;
+    /** TP fallback 倍数（无明确对面 S/R 时用 3.0×ATR） */
+    private static final double TP_ATR_FALLBACK = 3.0;
 
     /**
      * 拒绝K线最小振幅（相对ATR）
@@ -122,7 +124,7 @@ public class SRRejectionScalpingStrategy implements Strategy {
      *   UTC 10 (北京 18:00) = 伦敦中段震荡 → 23.1%胜率，-$1010
      *   UTC 13 (北京 21:00) = 美欧重叠，方向最混乱 → 19.0%胜率，-$1365
      */
-    private static final int[] NOISE_HOURS_UTC = {1, 5, 6, 7, 8, 10, 13};
+    private static final int[] NOISE_HOURS_UTC = {1, 5, 6, 7, 8, 10, 13, 14, 15, 16};
 
     @Autowired
     private ATRCalculator atrCalculator;
@@ -141,6 +143,47 @@ public class SRRejectionScalpingStrategy implements Strategy {
      * 价格在支撑位 + 动量超卖 → 做多拒绝信号更可靠
      */
     private static final double STOCH_OVERSOLD_THRESHOLD = 25.0;
+
+    // ── S/R 翻转做空参数 ──────────────────────────────────────
+
+    /**
+     * 翻转检测：向前看多少根K线内是否有有效跌穿（60根=5小时）
+     * 超出此窗口的跌穿视为过期，不再视为有效翻转信号
+     */
+    private static final int FLIP_LOOKBACK = 60;
+
+    /**
+     * 翻转确认：最少需要多少根K线的收盘价低于支撑位，才算真实跌穿
+     * 回测验证：4根过严（把大量盈利信号也过滤掉了），保持3根
+     */
+    private static final int FLIP_CONFIRM_CLOSES = 3;
+
+    /**
+     * 翻转确认：收盘价需低于支撑位多少才算有效跌穿（0.10%）
+     * 防止浮点误差和极微小滑点导致误判
+     */
+    private static final double FLIP_CLOSE_THRESHOLD_PCT = 0.0010;
+
+    /**
+     * 翻转入场：当前价格距翻转阻力位的最大上行距离（0.30%，百分比）
+     * 价格尚未反弹至翻转位附近时不触发；价格突破翻转位后也不触发
+     */
+    private static final double FLIP_PROXIMITY_PCT = 0.30;
+
+    /**
+     * Flip专用影线质量门槛
+     * 回测验证：按影线比区分 Flip 胜率无明显规律（57%影线也有+$433大赢单）
+     * 保持与普通拒绝一致的0.55，不单独收紧
+     */
+    private static final double FLIP_WICK_RATIO_THRESHOLD = 0.55;
+
+    /**
+     * 近期趋势封锁阈值（设为99.9%=禁用）
+     * 实证：SR拒绝信号出现时，价格刚好到达S/R位，此时intradayDrop/Rise必然偏大，
+     * 导致过滤器正好在信号最强时封锁交易，净效果为负。
+     * 保留代码结构，阈值设为不可能触发的99.9%。
+     */
+    private static final double INTRADAY_TREND_THRESHOLD = 99.9;
 
     // ─────────────────────────────────────────────────────────
     // Strategy 接口实现
@@ -183,7 +226,8 @@ public class SRRejectionScalpingStrategy implements Strategy {
 
         // ── 宏观趋势感知（7d 价格变化，硬性提高逆势门槛）──
         // 在牛市中做空需要更极端的 StochRSI 超买确认，防止在上涨趋势中频繁被轧空
-        double change7d = computeMacroChange7d(klines);
+        double change7d  = computeMacroChange7d(klines);
+        double change24h = computeMacroChange24h(klines);
         boolean macroBull = change7d > 2.0;   // 7天涨幅 > 2% 视为宏观牛市
         boolean macroBear = change7d < -2.0;   // 7天跌幅 > 2% 视为宏观熊市
 
@@ -200,8 +244,9 @@ public class SRRejectionScalpingStrategy implements Strategy {
         double shortStochThreshold = Math.min(95.0, STOCH_OVERBOUGHT_THRESHOLD + shortAdj);
         double longStochThreshold  = Math.max(5.0,  STOCH_OVERSOLD_THRESHOLD   + longAdj);
 
-        log.info("[SRRejection] 宏观7d={}% {} | EMA={} | 做空StochRSI门槛={} 做多门槛={}",
+        log.info("[SRRejection] 宏观7d={}% 24h={}% {} | EMA={} | 做空StochRSI门槛={} 做多门槛={}",
                 String.format("%.2f", change7d),
+                String.format("%.2f", change24h),
                 macroBull ? "BULL" : (macroBear ? "BEAR" : "NEUTRAL"),
                 emaUp ? "UP" : (emaDown ? "DOWN" : "FLAT"),
                 String.format("%.0f", shortStochThreshold),
@@ -216,6 +261,18 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 String.format("%.1f", stochRSI.getK()),
                 String.format("%.1f", stochRSI.getD()),
                 stochRSI.getDescription());
+
+        // ── 日内趋势感知（防止在单边行情中逆势开仓）──
+        double intradayDropPct = computeIntradayDropFromHigh(klines);  // 距日内最高跌幅%
+        double intradayRisePct = computeIntradayRiseFromLow(klines);   // 距日内最低涨幅%
+        boolean intradayBear = intradayDropPct > INTRADAY_TREND_THRESHOLD;  // 日内熊市
+        boolean intradayBull = intradayRisePct > INTRADAY_TREND_THRESHOLD;  // 日内牛市
+        if (intradayBear || intradayBull) {
+            log.info("[SRRejection] 日内趋势感知: 跌{}% 涨{}% → {}",
+                    String.format("%.2f", intradayDropPct),
+                    String.format("%.2f", intradayRisePct),
+                    intradayBear ? "日内熊市(封锁做多)" : "日内牛市(封锁普通做空)");
+        }
 
         // ──────────────────────────────────────────────────────
         // 做空：阻力位 + 上影线拒绝 + 确认K线 + StochRSI 超买确认
@@ -250,49 +307,145 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 }
 
                 if (confirmOk) {
-                    // StochRSI 动态门槛：顺势 >75，逆 1H 趋势 >85
-                    if (stochRSI.getK() < shortStochThreshold) {
-                        log.info("[SRRejection] 做空被 StochRSI 过滤 K={} < {}（{}）",
-                                String.format("%.1f", stochRSI.getK()),
-                                String.format("%.0f", shortStochThreshold),
-                                emaUp ? "逆1H上升趋势，门槛提高至85" : "动量未超买");
+                    // ── 日内牛市封锁普通做空（防止在强势上涨日逆势做空）──
+                    if (intradayBull) {
+                        log.info("[SRRejection] 普通做空被日内牛市封锁（日内涨{}%>{}%）",
+                                String.format("%.2f", intradayRisePct), INTRADAY_TREND_THRESHOLD);
+                    }
+                    // ── MACRO_BULL + 24h无真实回调 → 完全封锁做空 ──
+                    // 对齐 CompositeStrategy 宏观锁逻辑：牛市中必须有明确回调（24h < -0.5%）才允许做空
+                    else if (macroBull && change24h > -0.5) {
+                        log.info("[SRRejection] 做空被MACRO_BULL封锁(7d={}% 24h={}%，需24h<-0.5%才允许)",
+                                String.format("%.2f", change7d), String.format("%.2f", change24h));
                     } else {
-                        double slBase = Math.max(bearish.wickExtreme, resistance.getPrice());
-                        double sl = slBase + atr * SL_ATR_BUFFER;
-                        double risk = sl - currentPrice;
-
-                        if (risk <= 0) {
-                            log.info("[SRRejection] 做空 SL 计算异常 (sl={} <= currentPrice={})", sl, currentPrice);
+                        // K/D方向加权：K仍高于D说明动量未转空，门槛再提高10点
+                        double effectiveShortThreshold = shortStochThreshold
+                                + (stochRSI.getK() > stochRSI.getD() ? 10.0 : 0.0);
+                        if (stochRSI.getK() < effectiveShortThreshold) {
+                            log.info("[SRRejection] 做空被 StochRSI 过滤 K={} < {}（{}{}）",
+                                    String.format("%.1f", stochRSI.getK()),
+                                    String.format("%.0f", effectiveShortThreshold),
+                                    emaUp ? "逆1H上升趋势" : "动量未超买",
+                                    stochRSI.getK() > stochRSI.getD() ? " +K>D+10" : "");
                         } else {
-                            double tp = computeShortTP(levels, currentPrice, atr, risk);
-                            double reward = currentPrice - tp;
-                            double rr = reward / risk;
+                            double slBase = Math.max(bearish.wickExtreme, resistance.getPrice());
+                            double sl = slBase + atr * SL_ATR_BUFFER;
+                            double risk = sl - currentPrice;
 
-                            if (rr >= MIN_RR_RATIO) {
-                                int strength = computeStrength(resistance, bearish, stochRSI, rr);
-                                String reason = String.format(
-                                        "阻力%.2f 上影线拒绝(影线比%.0f%%) StochRSI K=%.1f(超买) | SL=%.2f TP=%.2f RR=%.2f:1",
-                                        resistance.getPrice(), bearish.wickRatio * 100,
-                                        stochRSI.getK(), sl, tp, rr);
-                                log.info("[SRRejection] ✅ SELL | {}", reason);
-                                return TradingSignal.builder()
-                                        .type(TradingSignal.SignalType.SELL)
-                                        .strength(strength).score(strength)
-                                        .strategyName(STRATEGY_NAME)
-                                        .symbol(context.getSymbol())
-                                        .currentPrice(context.getCurrentPrice())
-                                        .suggestedStopLoss(BigDecimal.valueOf(sl).setScale(2, RoundingMode.HALF_UP))
-                                        .suggestedTakeProfit(BigDecimal.valueOf(tp).setScale(2, RoundingMode.HALF_UP))
-                                        .reason(reason)
-                                        .build();
+                            if (risk <= 0) {
+                                log.info("[SRRejection] 做空 SL 计算异常 (sl={} <= currentPrice={})", sl, currentPrice);
                             } else {
-                                log.info("[SRRejection] 做空赔率不足 {}:1 (需≥{}:1)，HOLD",
-                                        String.format("%.2f", rr), MIN_RR_RATIO);
+                                double tp = computeShortTP(levels, currentPrice, atr, risk);
+                                double reward = currentPrice - tp;
+                                double rr = reward / risk;
+
+                                if (rr >= MIN_RR_RATIO) {
+                                    int strength = computeStrength(resistance, bearish, stochRSI, rr);
+                                    String reason = String.format(
+                                            "阻力%.2f 上影线拒绝(影线比%.0f%%) StochRSI K=%.1f(超买) | SL=%.2f TP=%.2f RR=%.2f:1",
+                                            resistance.getPrice(), bearish.wickRatio * 100,
+                                            stochRSI.getK(), sl, tp, rr);
+                                    log.info("[SRRejection] ✅ SELL | {}", reason);
+                                    return TradingSignal.builder()
+                                            .type(TradingSignal.SignalType.SELL)
+                                            .strength(strength).score(strength)
+                                            .strategyName(STRATEGY_NAME)
+                                            .symbol(context.getSymbol())
+                                            .currentPrice(context.getCurrentPrice())
+                                            .suggestedStopLoss(BigDecimal.valueOf(sl).setScale(2, RoundingMode.HALF_UP))
+                                            .suggestedTakeProfit(BigDecimal.valueOf(tp).setScale(2, RoundingMode.HALF_UP))
+                                            .reason(reason)
+                                            .build();
+                                } else {
+                                    log.info("[SRRejection] 做空赔率不足 {}:1 (需≥{}:1)，HOLD",
+                                            String.format("%.2f", rr), MIN_RR_RATIO);
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // ──────────────────────────────────────────────────────
+        // S/R 翻转做空：STRONG 支撑被有效跌穿后，反弹回测时做空
+        // 适用场景：单边暴跌后的 dead-cat bounce 回测翻转阻力
+        // ──────────────────────────────────────────────────────
+        KeyLevelCalculator.KeyLevel flippedResistance = findFlippedSupport(klines, levels, currentPrice);
+        if (flippedResistance != null) {
+            // 日内牛市封锁 Flip 做空（日内牛市中 Flip 也不应做空）
+            if (intradayBull) {
+                log.info("[SRRejection] Flip做空被日内牛市封锁（日内涨{}%>{}%）",
+                        String.format("%.2f", intradayRisePct), INTRADAY_TREND_THRESHOLD);
+            } else {
+            RejectionCandle bearishFlip = findBearishRejection(klines, flippedResistance.getPrice(), REJECTION_LOOKBACK);
+            // Flip 专用影线质量门槛（比普通拒绝更严格）
+            if (bearishFlip.found && bearishFlip.wickRatio < FLIP_WICK_RATIO_THRESHOLD) {
+                log.info("[SRRejection] Flip影线质量不足 {}%<{}%，跳过",
+                        String.format("%.0f", bearishFlip.wickRatio * 100),
+                        String.format("%.0f", FLIP_WICK_RATIO_THRESHOLD * 100));
+                bearishFlip = RejectionCandle.NOT_FOUND;
+            }
+            if (bearishFlip.found) {
+                boolean confirmOk = true;
+                if (REQUIRE_CONFIRM_CANDLE && bearishFlip.klineIndex == 1 && klines.size() > 1) {
+                    Kline confirmK = klines.get(0);
+                    double confirmClose = confirmK.getClosePrice().doubleValue();
+                    double flipPrice = flippedResistance.getPrice();
+                    if (confirmClose > flipPrice) {
+                        confirmOk = false;
+                        log.info("[SRRejection] Flip做空被确认K线过滤（close={} > 翻转阻力{}，拒绝失效）",
+                                String.format("%.2f", confirmClose), String.format("%.2f", flipPrice));
+                    }
+                }
+                if (confirmOk) {
+                    if (macroBull && change24h > -0.5) {
+                        log.info("[SRRejection] Flip做空被MACRO_BULL封锁(7d={}% 24h={}%)",
+                                String.format("%.2f", change7d), String.format("%.2f", change24h));
+                    } else {
+                        double effectiveFlipThreshold = shortStochThreshold
+                                + (stochRSI.getK() > stochRSI.getD() ? 10.0 : 0.0);
+                        if (stochRSI.getK() < effectiveFlipThreshold) {
+                            log.info("[SRRejection] Flip做空被StochRSI过滤 K={} < {}",
+                                    String.format("%.1f", stochRSI.getK()),
+                                    String.format("%.0f", effectiveFlipThreshold));
+                        } else {
+                            double slBase = Math.max(bearishFlip.wickExtreme, flippedResistance.getPrice());
+                            double sl = slBase + atr * SL_ATR_BUFFER;
+                            double risk = sl - currentPrice;
+                            if (risk <= 0) {
+                                log.info("[SRRejection] Flip做空SL计算异常 (sl={} <= currentPrice={})", sl, currentPrice);
+                            } else {
+                                double tp = computeShortTP(levels, currentPrice, atr, risk);
+                                double reward = currentPrice - tp;
+                                double rr = reward / risk;
+                                if (rr >= MIN_RR_RATIO) {
+                                    int strength = computeStrength(flippedResistance, bearishFlip, stochRSI, rr);
+                                    String reason = String.format(
+                                            "S/R翻转 支撑%.2f→阻力 上影线拒绝(影线比%.0f%%) StochRSI K=%.1f | SL=%.2f TP=%.2f RR=%.2f:1",
+                                            flippedResistance.getPrice(), bearishFlip.wickRatio * 100,
+                                            stochRSI.getK(), sl, tp, rr);
+                                    log.info("[SRRejection] ✅ FLIP-SELL | {}", reason);
+                                    return TradingSignal.builder()
+                                            .type(TradingSignal.SignalType.SELL)
+                                            .strength(strength).score(strength)
+                                            .strategyName(STRATEGY_NAME)
+                                            .symbol(context.getSymbol())
+                                            .currentPrice(context.getCurrentPrice())
+                                            .suggestedStopLoss(BigDecimal.valueOf(sl).setScale(2, RoundingMode.HALF_UP))
+                                            .suggestedTakeProfit(BigDecimal.valueOf(tp).setScale(2, RoundingMode.HALF_UP))
+                                            .reason(reason)
+                                            .build();
+                                } else {
+                                    log.info("[SRRejection] Flip做空赔率不足 {}:1 (需≥{}:1)",
+                                            String.format("%.2f", rr), MIN_RR_RATIO);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            } // end else !intradayBull
         }
 
         // ──────────────────────────────────────────────────────
@@ -328,12 +481,21 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 }
 
                 if (confirmOk) {
+                    // ── 日内熊市封锁做多（防止在强势下跌日逆势做多）──
+                    if (intradayBear) {
+                        log.info("[SRRejection] 做多被日内熊市封锁（日内跌{}%>{}%，拒绝逆势做多）",
+                                String.format("%.2f", intradayDropPct), INTRADAY_TREND_THRESHOLD);
+                    } else {
+                    // K/D方向加权：K仍低于D说明动量未转多，门槛再降低10点（要求更深超卖）
+                    double effectiveLongThreshold = longStochThreshold
+                            + (stochRSI.getK() < stochRSI.getD() ? -10.0 : 0.0);
                     // StochRSI 动态门槛：顺势 <25，逆 1H 趋势 <15
-                    if (stochRSI.getK() > longStochThreshold) {
-                        log.info("[SRRejection] 做多被 StochRSI 过滤 K={} > {}（{}）",
+                    if (stochRSI.getK() > effectiveLongThreshold) {
+                        log.info("[SRRejection] 做多被 StochRSI 过滤 K={} > {}（{}{}）",
                                 String.format("%.1f", stochRSI.getK()),
-                                String.format("%.0f", longStochThreshold),
-                                emaDown ? "逆1H下降趋势，门槛降低至15" : "动量未超卖");
+                                String.format("%.0f", effectiveLongThreshold),
+                                emaDown ? "逆1H下降趋势，门槛降低至15" : "动量未超卖",
+                                stochRSI.getK() < stochRSI.getD() ? " +K<D-10" : "");
                     } else {
                         double slBase = Math.min(bullish.wickExtreme, support.getPrice());
                         double sl = slBase - atr * SL_ATR_BUFFER;
@@ -369,6 +531,7 @@ public class SRRejectionScalpingStrategy implements Strategy {
                             }
                         }
                     }
+                    } // end else !intradayBear
                 }
             }
         }
@@ -516,6 +679,49 @@ public class SRRejectionScalpingStrategy implements Strategy {
         return RejectionCandle.NOT_FOUND;
     }
 
+    /**
+     * 寻找"支撑翻转阻力"位（S/R Flip）
+     *
+     * 检测条件（全部满足）：
+     *   1. allLevels 中存在 STRONG 或多来源合流的 SUPPORT 位
+     *   2. 该支撑价格 > 当前价格（价格已跌穿该支撑位）
+     *   3. 当前价格距该位置 ≤ FLIP_PROXIMITY_PCT（价格已反弹回翻转位附近）
+     *   4. 最近 FLIP_LOOKBACK 根K线中，至少 FLIP_CONFIRM_CLOSES 根K线的收盘价
+     *      低于（支撑位 × (1 - FLIP_CLOSE_THRESHOLD_PCT)），确认真实跌穿而非假破
+     *
+     * 返回满足条件的、距当前价格最近的翻转阻力位；无则返回 null。
+     */
+    private KeyLevelCalculator.KeyLevel findFlippedSupport(
+            List<Kline> klines,
+            KeyLevelCalculator.KeyLevelResult levels,
+            double currentPrice) {
+
+        int lookback = Math.min(FLIP_LOOKBACK, klines.size());
+
+        return levels.getAllLevels().stream()
+                .filter(l -> l.getType() == KeyLevelCalculator.LevelType.SUPPORT)
+                .filter(l -> l.getStrength() == KeyLevelCalculator.LevelStrength.STRONG
+                        || (l.getSource() != null && l.getSource().contains("+")))
+                .filter(l -> l.getPrice() > currentPrice)
+                .filter(l -> {
+                    double distPct = (l.getPrice() - currentPrice) / currentPrice * 100;
+                    return distPct <= FLIP_PROXIMITY_PCT;
+                })
+                .filter(l -> {
+                    double breakThreshold = l.getPrice() * (1 - FLIP_CLOSE_THRESHOLD_PCT);
+                    long breakCount = klines.subList(0, lookback).stream()
+                            .filter(k -> k.getClosePrice().doubleValue() < breakThreshold)
+                            .count();
+                    if (breakCount >= FLIP_CONFIRM_CLOSES) {
+                        log.info("[SRRejection] S/R翻转候选：支撑{}→阻力（近{}根K线中{}根收盘确认跌穿）",
+                                String.format("%.2f", l.getPrice()), lookback, breakCount);
+                    }
+                    return breakCount >= FLIP_CONFIRM_CLOSES;
+                })
+                .min(Comparator.comparingDouble(l -> Math.abs(l.getPrice() - currentPrice)))
+                .orElse(null);
+    }
+
     // ─────────────────────────────────────────────────────────
     // TP 计算
     // ─────────────────────────────────────────────────────────
@@ -540,8 +746,8 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 }
             }
         }
-        // fallback: 2×ATR
-        return currentPrice - atr * TP_ATR_FALLBACK;
+        // fallback: 取ATR倍数与实际风险2.5倍中的较大值，确保TP与实际SL成比例
+        return currentPrice - Math.max(atr * TP_ATR_FALLBACK, risk * TP_ATR_FALLBACK);
     }
 
     /** 做多 TP：取最近阻力位，不够则 fallback 2×ATR */
@@ -564,8 +770,8 @@ public class SRRejectionScalpingStrategy implements Strategy {
                 }
             }
         }
-        // fallback: 2×ATR
-        return currentPrice + atr * TP_ATR_FALLBACK;
+        // fallback: 取ATR倍数与实际风险2.5倍中的较大值，确保TP与实际SL成比例
+        return currentPrice + Math.max(atr * TP_ATR_FALLBACK, risk * TP_ATR_FALLBACK);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -634,12 +840,58 @@ public class SRRejectionScalpingStrategy implements Strategy {
     }
 
     /**
+     * 计算最近12根K线（约1小时）内收盘价最高点到当前收盘价的跌幅（%，正数表示已跌）
+     *
+     * 相比"全日高点"方案的优势：
+     *   价格在支撑位底部企稳时，近1小时收盘价最大值 ≈ 当前价 → 跌幅小 → 不误判为熊市
+     *   价格在最近1小时内持续下跌时，最大收盘价远高于当前价 → 跌幅大 → 正确判为熊市
+     */
+    private double computeIntradayDropFromHigh(List<Kline> klines) {
+        if (klines.isEmpty()) return 0.0;
+        int window = Math.min(12, klines.size());
+        double currentPrice = klines.get(0).getClosePrice().doubleValue();
+        double recentHighClose = klines.subList(0, window).stream()
+                .mapToDouble(k -> k.getClosePrice().doubleValue())
+                .max().orElse(currentPrice);
+        return recentHighClose > 0 ? (recentHighClose - currentPrice) / recentHighClose * 100.0 : 0.0;
+    }
+
+    /**
+     * 计算最近12根K线（约1小时）内收盘价最低点到当前收盘价的涨幅（%，正数表示已涨）
+     *
+     * 相比"全日低点"方案的优势：
+     *   价格在阻力位顶部受压时，近1小时收盘价最小值 ≈ 当前价 → 涨幅小 → 不误判为牛市
+     *   价格在最近1小时内持续上涨时，最小收盘价远低于当前价 → 涨幅大 → 正确判为牛市
+     */
+    private double computeIntradayRiseFromLow(List<Kline> klines) {
+        if (klines.isEmpty()) return 0.0;
+        int window = Math.min(12, klines.size());
+        double currentPrice = klines.get(0).getClosePrice().doubleValue();
+        double recentLowClose = klines.subList(0, window).stream()
+                .mapToDouble(k -> k.getClosePrice().doubleValue())
+                .min().orElse(currentPrice);
+        return recentLowClose > 0 ? (currentPrice - recentLowClose) / recentLowClose * 100.0 : 0.0;
+    }
+
+    /**
      * 计算 7 天价格变化百分比（用于宏观趋势判断）
      * klines 为倒序列表（最新在前），5m K线 7天 = 2016 根
      */
     private double computeMacroChange7d(List<Kline> klines) {
         int lookback = Math.min(2016, klines.size() - 1);
         if (lookback < 288) return 0.0;
+        double current = klines.get(0).getClosePrice().doubleValue();
+        double past    = klines.get(lookback).getClosePrice().doubleValue();
+        return past > 0 ? (current - past) / past * 100.0 : 0.0;
+    }
+
+    /**
+     * 计算 24 小时价格变化百分比（用于 MACRO_BULL 封锁做空时的回调确认）
+     * klines 为倒序列表（最新在前），5m K线 24小时 = 288 根
+     */
+    private double computeMacroChange24h(List<Kline> klines) {
+        int lookback = Math.min(288, klines.size() - 1);
+        if (lookback < 60) return 0.0;
         double current = klines.get(0).getClosePrice().doubleValue();
         double past    = klines.get(lookback).getClosePrice().doubleValue();
         return past > 0 ? (current - past) / past * 100.0 : 0.0;

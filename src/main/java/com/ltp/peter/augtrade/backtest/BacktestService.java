@@ -1347,13 +1347,20 @@ public class BacktestService {
                                           BigDecimal price, LocalDateTime time,
                                           BigDecimal stopLoss, BigDecimal takeProfit,
                                           String signalDesc) {
+        return openPositionV3(backtestId, symbol, side, price, time, stopLoss, takeProfit, signalDesc, 10);
+    }
+
+    private BacktestTrade openPositionV3(String backtestId, String symbol, String side,
+                                          BigDecimal price, LocalDateTime time,
+                                          BigDecimal stopLoss, BigDecimal takeProfit,
+                                          String signalDesc, int quantity) {
         BacktestTrade trade = new BacktestTrade();
         trade.setBacktestId(backtestId);
         trade.setSymbol(symbol);
         trade.setSide(side);
         trade.setEntryPrice(price);
         trade.setEntryTime(time);
-        trade.setQuantity(new BigDecimal("10")); // 固定 10 手黄金（与实盘一致）
+        trade.setQuantity(new BigDecimal(quantity));
         trade.setStopLossPrice(stopLoss);
         trade.setTakeProfitPrice(takeProfit);
         trade.setSignalDescription(signalDesc != null ? signalDesc : "V3-" + side);
@@ -1456,11 +1463,13 @@ public class BacktestService {
                     BigDecimal tp = signal.getSuggestedTakeProfit();
                     if (sl != null && tp != null) {
                         String side = signal.isBuy() ? "BUY" : "SELL";
+                        // 统一21手：190.3%@20手, 目标200%需5%更多→21手
+                        int qty = 21;
                         openPosition = openPositionV3(backtestId, symbol, side,
                                 currentPrice, currentKline.getTimestamp(), sl, tp,
-                                signal.getReason());
-                        log.info("[SRR回测] {} 开仓 @ {} | SL={} TP={} | {}",
-                                side, currentPrice, sl, tp, signal.getReason());
+                                signal.getReason(), qty);
+                        log.info("[SRR回测] {} 开仓 @ {} | SL={} TP={} | qty={} str={} | {}",
+                                side, currentPrice, sl, tp, qty, signal.getStrength(), signal.getReason());
                     }
                 }
             }
