@@ -110,7 +110,7 @@ binance:
   futures:
     symbol: XAUUSDT                         # ✅ 黄金永续合约
     live-mode: false                        # ⚠️ 合约实盘开关（false=只读，true=实盘）
-    max-order-amount: 10                    # 🔒 单笔最大数量（整数，如10=10盎司）
+    max-order-amount: 21                    # 🔒 单笔最大数量（整数，如21=21盎司）
     max-daily-trades: 20                    # 🔒 每日最大交易次数
     max-daily-loss: 500.0                   # 🔒 每日最大亏损（USD）
     leverage: 2                             # 🔒 杠杆倍数（1-125，建议2-5）
