@@ -48,6 +48,9 @@ public class StrategyOrchestrator {
 
     @Autowired
     private SRRejectionScalpingStrategy srRejectionScalpingStrategy;
+
+    @Autowired
+    private EMAPullbackVolumeStrategy emaPullbackVolumeStrategy;
     
     // 可选：单独注入各个指标计算器以便精确控制
     @Autowired
@@ -588,6 +591,9 @@ public class StrategyOrchestrator {
     private Strategy resolveActiveStrategy() {
         if ("sr_rejection".equalsIgnoreCase(activeStrategy)) {
             return srRejectionScalpingStrategy;
+        }
+        if ("ema_pullback".equalsIgnoreCase(activeStrategy)) {
+            return emaPullbackVolumeStrategy;
         }
         return compositeStrategy;
     }

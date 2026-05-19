@@ -81,6 +81,15 @@ public class BacktestService {
     @Autowired
     private com.ltp.peter.augtrade.strategy.core.SRRejectionScalpingStrategy srRejectionScalpingStrategy;
 
+    @Autowired
+    private com.ltp.peter.augtrade.strategy.core.EMAPullbackVolumeStrategy emaPullbackVolumeStrategy;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.VWAPCalculator vwapCalculator;
+
+    @Autowired
+    private com.ltp.peter.augtrade.indicator.StochRSICalculator stochRSICalculator;
+
     // 手续费率 (0.05% * 0.7 = 0.035%, VIP折扣)
     private static final BigDecimal FEE_RATE = new BigDecimal("0.00035");
     
@@ -153,6 +162,9 @@ public class BacktestService {
                     break;
                 case "SR_REJECTION":
                     strategyResult = executeSRRejectionBacktest(backtestId, symbol, interval, klines, initialCapital);
+                    break;
+                case "EMA_PULLBACK":
+                    strategyResult = executeEMAPullbackBacktest(backtestId, symbol, interval, klines, initialCapital);
                     break;
                 default:
                     log.error("未知的策略: {}", strategyName);
@@ -1537,5 +1549,193 @@ public class BacktestService {
             log.error("[SRR回测] 信号评估异常", e);
             return null;
         }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // EMA_PULLBACK 回测 — EMA 回调量能爆发策略
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * 执行 EMAPullbackVolumeStrategy 回测。
+     *
+     * 与 SR_REJECTION 回测的核心区别：
+     *   - 以 EMA20 动态均线为入场锚点（非静态 S/R 位）
+     *   - 需要 VWAP、Supertrend、ADX、MacroTrend 指标
+     *   - StochRSI 在策略内部自行计算，无需外部注入
+     *   - 固定开仓 20 手，SL/TP 由策略基于 EMA20 + ATR 计算
+     */
+    private BacktestResult executeEMAPullbackBacktest(String backtestId, String symbol, String interval,
+                                                       List<Kline> allKlines, BigDecimal initialCapital) {
+        log.info("[EPVS回测] 开始 EMA_PULLBACK 回测 | K线总数: {} | 品种: {}", allKlines.size(), symbol);
+
+        BigDecimal capital = initialCapital;
+        BigDecimal maxCapital = initialCapital;
+        List<BacktestTrade> trades = new ArrayList<>();
+        BacktestTrade openPosition = null;
+
+        // 至少需要 2016 根历史K线保证宏观趋势窗口（7天@5m=2016根）
+        int startIndex = Math.min(2016, allKlines.size() / 2);
+
+        for (int i = startIndex; i < allKlines.size(); i++) {
+            Kline currentKline = allKlines.get(i);
+            BigDecimal currentPrice = currentKline.getClosePrice();
+
+            // ── 检查固定 TP/SL ──
+            if (openPosition != null) {
+                boolean shouldExit = false;
+                String exitReason = "";
+
+                if ("BUY".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) >= 0) {
+                        shouldExit = true; exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) <= 0) {
+                        shouldExit = true; exitReason = "STOP_LOSS";
+                    }
+                } else if ("SELL".equals(openPosition.getSide())) {
+                    if (currentPrice.compareTo(openPosition.getTakeProfitPrice()) <= 0) {
+                        shouldExit = true; exitReason = "TAKE_PROFIT";
+                    } else if (currentPrice.compareTo(openPosition.getStopLossPrice()) >= 0) {
+                        shouldExit = true; exitReason = "STOP_LOSS";
+                    }
+                }
+
+                if (shouldExit) {
+                    openPosition = closePosition(openPosition, currentPrice,
+                            currentKline.getTimestamp(), exitReason, capital);
+                    capital = capital.add(openPosition.getProfitLoss());
+                    trades.add(openPosition);
+                    if (capital.compareTo(maxCapital) > 0) maxCapital = capital;
+                    openPosition = null;
+                }
+            }
+
+            // ── 无持仓时检查新信号 ──
+            if (openPosition == null) {
+                com.ltp.peter.augtrade.strategy.signal.TradingSignal signal =
+                        evaluateEMAPullbackSignal(symbol, allKlines, i);
+
+                if (signal != null && (signal.isBuy() || signal.isSell())) {
+                    BigDecimal sl = signal.getSuggestedStopLoss();
+                    BigDecimal tp = signal.getSuggestedTakeProfit();
+                    if (sl != null && tp != null) {
+                        String side = signal.isBuy() ? "BUY" : "SELL";
+                        int qty = 20;
+                        openPosition = openPositionV3(backtestId, symbol, side,
+                                currentPrice, currentKline.getTimestamp(), sl, tp,
+                                signal.getReason(), qty);
+                        log.info("[EPVS回测] {} 开仓 @ {} | SL={} TP={} | qty={} str={} | {}",
+                                side, currentPrice, sl, tp, qty, signal.getStrength(), signal.getReason());
+                    }
+                }
+            }
+        }
+
+        // 回测结束强制平仓
+        if (openPosition != null) {
+            Kline lastKline = allKlines.get(allKlines.size() - 1);
+            openPosition = closePosition(openPosition, lastKline.getClosePrice(),
+                    lastKline.getTimestamp(), "END_OF_BACKTEST", capital);
+            capital = capital.add(openPosition.getProfitLoss());
+            trades.add(openPosition);
+        }
+
+        for (BacktestTrade trade : trades) {
+            trade.setCreateTime(java.time.LocalDateTime.now());
+            backtestTradeMapper.insert(trade);
+        }
+
+        log.info("[EPVS回测] 完成 | 交易次数: {} | 最终资金: {} | 收益: {}",
+                trades.size(), capital, capital.subtract(initialCapital));
+        return calculateBacktestResult(symbol, interval, initialCapital, capital, maxCapital, trades);
+    }
+
+    /**
+     * 用 EMAPullbackVolumeStrategy 评估当前 K 线的信号。
+     *
+     * 需要注入上下文：EMATrend、Supertrend、VWAP、ADX、MacroTrend三窗口。
+     * StochRSI 和 ATR 由策略内部直接从 klines 计算。
+     *
+     * @param allKlines    正序 K 线列表（最旧在前）
+     * @param currentIndex 当前 K 线索引
+     */
+    private com.ltp.peter.augtrade.strategy.signal.TradingSignal evaluateEMAPullbackSignal(
+            String symbol, List<Kline> allKlines, int currentIndex) {
+        try {
+            // 取最近 2016 根（7天@5m），保证宏观趋势窗口完整
+            int windowSize = Math.min(2016, currentIndex + 1);
+            List<Kline> reversedKlines = new ArrayList<>(windowSize);
+            for (int j = currentIndex; j >= 0 && j > currentIndex - windowSize; j--) {
+                reversedKlines.add(allKlines.get(j));
+            }
+            if (reversedKlines.size() < 60) return null;
+
+            BigDecimal currentPrice = reversedKlines.get(0).getClosePrice();
+            com.ltp.peter.augtrade.strategy.core.MarketContext context =
+                    com.ltp.peter.augtrade.strategy.core.MarketContext.builder()
+                            .symbol(symbol)
+                            .klines(reversedKlines)
+                            .currentPrice(currentPrice)
+                            .timestamp(System.currentTimeMillis())
+                            .build();
+
+            // EMATrend (EMA20/EMA50)
+            com.ltp.peter.augtrade.indicator.EMACalculator.EMATrend emaTrend =
+                    emaCalculator.calculateTrend(reversedKlines, 20, 50);
+            if (emaTrend != null) context.addIndicator("EMATrend", emaTrend);
+
+            // Supertrend
+            com.ltp.peter.augtrade.indicator.SupertrendCalculator.SupertrendResult supertrend =
+                    supertrendCalculator.calculate(reversedKlines);
+            if (supertrend != null) context.addIndicator("Supertrend", supertrend);
+
+            // VWAP
+            com.ltp.peter.augtrade.indicator.VWAPCalculator.VWAPResult vwap =
+                    vwapCalculator.calculate(reversedKlines);
+            if (vwap != null) context.addIndicator("VWAP", vwap);
+
+            // ADX
+            Double adx = adxCalculator.calculate(reversedKlines);
+            if (adx != null) context.addIndicator("ADX", adx);
+
+            // MacroTrend（7d/24h 价格变化，同 StrategyOrchestrator 逻辑）
+            injectMacroTrend(context, reversedKlines);
+
+            return emaPullbackVolumeStrategy.generateSignal(context);
+
+        } catch (Exception e) {
+            log.error("[EPVS回测] 信号评估异常", e);
+            return null;
+        }
+    }
+
+    /**
+     * 向上下文注入宏观趋势（24h/7d 价格变化）。
+     * 与 StrategyOrchestrator.calculateMacroTrend() 保持一致。
+     */
+    private void injectMacroTrend(com.ltp.peter.augtrade.strategy.core.MarketContext context,
+                                   List<Kline> klines) {
+        if (klines.size() < 30) return;
+        BigDecimal currentPrice = klines.get(0).getClosePrice();
+
+        // 24h 变化（288根@5m）
+        int idx24h = Math.min(288, klines.size() - 1);
+        double pct24h = currentPrice.subtract(klines.get(idx24h).getClosePrice())
+                .divide(klines.get(idx24h).getClosePrice(), 6, java.math.RoundingMode.HALF_UP)
+                .doubleValue() * 100;
+        context.addIndicator("MacroPriceChange24h", pct24h);
+
+        // 7d 变化（2016根@5m）
+        int idx7d = Math.min(2016, klines.size() - 1);
+        double pct7d = currentPrice.subtract(klines.get(idx7d).getClosePrice())
+                .divide(klines.get(idx7d).getClosePrice(), 6, java.math.RoundingMode.HALF_UP)
+                .doubleValue() * 100;
+        context.addIndicator("MacroPriceChange7d", pct7d);
+
+        // 趋势判定（与 StrategyOrchestrator 相同阈值）
+        String macroTrend;
+        if (pct7d > 3.0) macroTrend = "MACRO_BULL";
+        else if (pct7d < -3.0) macroTrend = "MACRO_BEAR";
+        else macroTrend = "MACRO_NEUTRAL";
+        context.addIndicator("MacroTrend", macroTrend);
     }
 }

@@ -41,6 +41,9 @@ public class TradingStrategyFactory {
 
     @Autowired
     private com.ltp.peter.augtrade.strategy.core.SRRejectionScalpingStrategy srRejectionScalpingStrategy;
+
+    @Autowired
+    private com.ltp.peter.augtrade.strategy.core.EMAPullbackVolumeStrategy emaPullbackVolumeStrategy;
     
     /**
      * 策略信号枚举（统一所有策略的返回类型）
@@ -81,6 +84,10 @@ public class TradingStrategyFactory {
 
                 case "sr_rejection":
                     signal = executeSRRejection(symbol);
+                    break;
+
+                case "ema_pullback":
+                    signal = executeEMAPullback(symbol);
                     break;
 
                 default:
@@ -192,6 +199,24 @@ public class TradingStrategyFactory {
     }
     
     /**
+     * 执行 EMA 回调量能爆发策略
+     */
+    private Signal executeEMAPullback(String symbol) {
+        log.info("📐 执行【EMA回调量能爆发策略】");
+        com.ltp.peter.augtrade.strategy.signal.TradingSignal result =
+                strategyOrchestrator.generateSignalWithStrategy(symbol, emaPullbackVolumeStrategy);
+        if (result.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.BUY) {
+            log.info("✅ EMA回调策略 → 买入信号 (强度: {}, 得分: {})", result.getStrength(), result.getScore());
+            return Signal.BUY;
+        } else if (result.getType() == com.ltp.peter.augtrade.strategy.signal.TradingSignal.SignalType.SELL) {
+            log.info("✅ EMA回调策略 → 卖出信号 (强度: {}, 得分: {})", result.getStrength(), result.getScore());
+            return Signal.SELL;
+        }
+        log.info("⏸️ EMA回调策略 → 观望");
+        return Signal.HOLD;
+    }
+
+    /**
      * 执行 SR 拒绝策略
      */
     private Signal executeSRRejection(String symbol) {
@@ -254,6 +279,9 @@ public class TradingStrategyFactory {
 
             case "sr_rejection":
                 return "SR拒绝策略 - 支撑/阻力位价格拒绝 + StochRSI确认，适合震荡市场";
+
+            case "ema_pullback":
+                return "EMA回调量能爆发策略 - EMA20均线回踩 + 量能爆发 + StochRSI + VWAP，适合趋势行情";
 
             default:
                 return "未知策略: " + activeStrategy;
